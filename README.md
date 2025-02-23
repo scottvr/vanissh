@@ -68,8 +68,9 @@ optional arguments:
 You may wonder about the awkwardly-specific command-line arguments relating to the pattern you'd like to see, so I'll explain simple that they are there to enable flexibility on a single command invocation, in order to save time by increasing the chances *something* will match that you'll be pleased with. (Though there's still room for improvement such as allowing for ANDing multiple arguments or negative patterns. Of course, if you're determined enough since your patterns can be a valid regex, you can roll your own ANDing and negatives and anything else your regex-fu might enable.)
 
 ## This example below is a way to generate a public key that matches
-- any of "31337", "leet", "l33t", "elite" anywhere in the key's Base64-encoded string
+- any of "31337", "leet", "l33t", "elite" anywhere in the key's Base64-encoded string OR
 - "el8" either as the first or last three characters of the key's Base64-encoded string
+whichever comes first.*
 ```bash
 python ssh-key-mem-bench-v2.py -e you@example.com \
     -ap "31337|leet|l33t|elite" \
@@ -96,6 +97,8 @@ and again, since it's all "OR" logic of terms at this point, the first example w
 Also, with the power of regex you could do something like this:
 `-ap "\b(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*\11?[ \t,'"]*\10|\10?)[ \t,'"]*\9|\9?)[ \t,'"]*\8|\8?)[ \t,'"]*\7|\7?)[ \t,'"]*\6|\6?)[ \t,'"]*\5|\5?)[ \t,'"]*\4|\4?)[ \t,'"]*\3|\3?)[ \t,'"]*\2|\2?))?[ \t,'"]*\1\b"` 
 and be assured that at some point, some day, given enough time, you'd have an ssh public key that was a palindrome!
+
+*there is a bit of post-match checking for  magic that occurs in the unlikely event that you specified a pattern in such a way where say a five-letter pattern is specified as well as a three-letter pattern that is found within that longer pattern. If it is about to declare a winning three-letter pattern, it will check just in case you get lucky and alert you if surround characters mean you also matched the five-letter pattern. I'm working on allowing the known characters of the pre-amble (I'll talk about this in a later section) to be checked in the event you have a `start` or `anywhere` pattern where the "AI" at the start of the Base64-encoded 32-byte key of your new ed25519 key.
 
 # some output examples
 ```bash
@@ -149,3 +152,18 @@ Each RSA key generation requires finding large prime numbers and performing rela
 ED25519 key generation is much faster (often by orders of magnitude)
 
 In my testing, ED25519 key generation is typically 5-10x faster than RSA-2048 for this purpose. I didn't even try with RSA4096 but I'd imagine the obvious.
+
+----
+
+According to [RFC8709](https://datatracker.ietf.org/doc/html/rfc8709):
+```
+4. Public Key Format
+The "ssh-ed25519" key format has the following encoding:
+
+string
+"ssh-ed25519"
+string
+key
+Here, 'key' is the 32-octet public key described in [RFC8032](https://datatracker.ietf.org/doc/html/rfc8032), Section 5.1.5.
+```
+
