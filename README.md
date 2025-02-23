@@ -92,7 +92,10 @@ python ssh-key-mem-bench-v2.py -e you@example.com \
     -ep "er" -ep "or" \
     -xp "ABCD"
 ```
-(and again, since it's all "OR" logic of terms at this point, the first example with the pipe-separated terms would be another way to accomplish the same.)
+and again, since it's all "OR" logic of terms at this point, the first example with the pipe-separated terms would be another way to accomplish the same.
+Also, with the power of regex you could do something like this:
+`-ap "\b(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*\11?[ \t,'"]*\10|\10?)[ \t,'"]*\9|\9?)[ \t,'"]*\8|\8?)[ \t,'"]*\7|\7?)[ \t,'"]*\6|\6?)[ \t,'"]*\5|\5?)[ \t,'"]*\4|\4?)[ \t,'"]*\3|\3?)[ \t,'"]*\2|\2?))?[ \t,'"]*\1\b"` 
+and be assured that at some point, some day, given enough time, you'd have an ssh public key that was a palindrome!
 
 # some output examples
 ```bash
@@ -116,12 +119,6 @@ Matched pattern '13' at position (63, 65)
 Found by worker 0 (PID: 28494)
 ```
 
-Obviously, that one was quite fast.  Of course, the more characters in your pattern and the more constraints you specify (position, case-sensitivity) the longer the average time for you to generate a winning vanity key will be.
-
-But, of course.. that's an average, over time, given enough generations.. I'm not a statistician and *I* know why; perhaps you will all soon know why as well as I try to explain some things. 
-
-# Some Thoughts and Learnings along the way.
-
 Here's an example of searching for a three-letter pattern:
 ```bash
 Found matching key in 12.18 seconds after 1974 attempts!
@@ -131,3 +128,24 @@ Matched pattern 'El8' at position (26, 29)
 ```
 
 That didn't take long at all. It was quite surprising to me.
+
+Of course, the more characters in your pattern and the more constraints you specify (position, case-sensitivity) the longer the average time for you to generate a winning vanity key will be.
+
+But, that's an average, over time, given enough generations.. I'm not a statistician and *I* know why; perhaps you will all soon know why as well as I try to explain some things. 
+
+
+# Some Thoughts and Learnings along the way.
+
+These examples above are from a very old T2.micro instance, and its single core generates, then does the strings matching, etc consistently at a rate of about 170 keys/second.
+The tool has benchmarking code, but I've yet to run it on any other machines as I still haven't even finished this initial documentation. 
+
+But something occurred to me, that seemed obvious and intuitive at first: "Hey, an RSA key has a lot more Base64-encoded text; it's much longer - surely that would vastly increase our chances of finding an "anywhere" match and thus speed this sucker up. I should add rsa2048 support"
+
+I did add the support. But what I did not consider before trying was that (although I having added support for both types of key to have been worthwhile, inasmuch as this tool is worth any while at least) an RSA key takes a substantially greater amount of time to generate than the ed25519 keys do.
+
+The public key format shows the modulus (n) of the RSA key pair, but finding specific patterns in that modulus isn't as simple as generating new keys rapidly because:
+
+Each RSA key generation requires finding large prime numbers and performing relatively expensive mathematical operations
+ED25519 key generation is much faster (often by orders of magnitude)
+
+In my testing, ED25519 key generation is typically 5-10x faster than RSA-2048 for this purpose. I didn't even try with RSA4096 but I'd imagine the obvious.
