@@ -116,13 +116,18 @@ class PatternSpec:
                         f"(max {max_length} chars)"
                     )
 
-                # Check if pattern could appear in base64
-                if not all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-                          for c in p if c not in '^$'):
-                    raise ValueError(
-                        f"Pattern '{p}' contains characters that cannot "
-                        "appear in base64-encoded data"
-                    )
+# Oh.. that's not so easy since we allow regex as pattern (literal chars in a regex 
+# such as if the user specifies -ap "[a-z]" those brackets and hyphen woulnd't match.
+# Perhaps an easier way is to just add a flag that says --use-regex or something that
+# really boils down to the user accepting that their regex should not allow or specify
+# chars that are not valid in Base64
+#                # Check if pattern could appear in base64
+#                if not all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+#                          for c in p if c not in '^$'):
+#                    raise ValueError(
+#                        f"Pattern '{p}' contains characters that cannot "
+#                        "appear in base64-encoded data"
+#                    )
 
     def compile(self):
         """Compile the pattern with appropriate anchors"""
