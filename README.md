@@ -4,7 +4,7 @@ Vanity SSH key generator
 ### Origin
 I was importing some public keys into an authorized_keys file manually for a small side project and noticed that about half of them were rsa2048 and the rest were ed25519, and that the Base64-encoded ed25519 keys were much shorter in length than the RSA keys, and then realized I knew nothing about the current state of recommended keysize and cipher and thought I should take a moment to learn. 
 
-A quick search lead me to [Brandon Checketts' blog]https://www.brandonchecketts.com/archives/ssh-ed25519-key-best-practices-for-2025) page on the topic (in which he pokes a little fun about his *older* version of a similar article ranking highly with the search engines, making him apparently feel somewhat obligated to write an updated version of an "SSH Key Best Practices" post. It's a good read and touches on things like "department keys", key rotation, and some other good stuff; check it out.
+A quick search lead me to [Brandon Checketts' blog](https://www.brandonchecketts.com/archives/ssh-ed25519-key-best-practices-for-2025) page on the topic (in which he pokes a little fun about his *older* version of a similar article ranking highly with the search engines, making him apparently feel somewhat obligated to write an updated version of an "SSH Key Best Practices" post. It's a good read and touches on things like "department keys", key rotation, and some other good stuff; check it out.
 
 But the reason I mention his blog post is neat the bottom he writes:
 >Obsessive/Compulsive Tip
