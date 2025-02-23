@@ -117,7 +117,7 @@ CPU Frequency (MHz):
   Avg: 2300
 
 Matching Key:
-Public key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILEYnLgpraYTF/Wq+zxSs+fpuOfxSwJ9krpfext13uzX test@test.com
+Public key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILEYnLgpraYTF/Wq+zxSs+fpuOfxSwJ9krpfext13uzX foo@bar.baz
 Matched pattern '13' at position (63, 65)
 Found by worker 0 (PID: 28494)
 ```
