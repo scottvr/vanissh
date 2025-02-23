@@ -17,7 +17,21 @@ class KeyParser:
     # Known headers for different key types
     KEY_HEADERS = {
         'ed25519': 'AAAAC3NzaC1lZDI1NTE5AAAA',
-        'rsa': 'AAAAB3NzaC1yc2EAAAADA'
+        'rsa': 'AAAAB3NzaC1yc2E'
+    }
+    # Known RSA exponent patterns
+    RSA_EXPONENTS = {
+        3: 'AAAABAQ',
+        17: 'AAAABEQ',
+        257: 'AAAACAQE',
+        65537: 'AAAADAQAB'
+    }
+    
+    # Known RSA modulus length indicators
+    RSA_MODULUS_PREFIXES = {
+        1024: 'AAAAg',
+        2048: 'AAABAQ',
+        4096: 'AAACAQ'  # Add more as needed
     }
 
     @staticmethod
@@ -25,32 +39,85 @@ class KeyParser:
         """Extract only the meaningful portion of the key for pattern matching"""
         parts = pubkey.split()
         if len(parts) < 2:
-            return None
+            return None, None
 
         base64_part = parts[1]
-
-        # Remove any base64 padding
         base64_part = base64_part.rstrip('=')
 
-        # Get the appropriate header
-        header = KeyParser.KEY_HEADERS.get(key_type)
-        if not header:
-            return None
+        if key_type == 'ed25519':
+            if not base64_part.startswith(KeyParser.ED25519_HEADER):
+                return None, None
+            # For ed25519, everything after header is fair game
+            return (
+                base64_part[len(KeyParser.ED25519_HEADER):],
+                len(KeyParser.ED25519_HEADER)
+            )
 
-        # Ensure key starts with expected header
-        if not base64_part.startswith(header):
-            return None
+        elif key_type == 'rsa':
+            if not base64_part.startswith(KeyParser.RSA_HEADER):
+                return None, None
 
-        # Return only the portion after the header
-        return base64_part[len(header):]
+            # Find where the actual key material starts
+            offset = len(KeyParser.RSA_HEADER)
+
+            # Try to identify the exponent portion
+            for exp_encoding in KeyParser.RSA_EXPONENTS.values():
+                if base64_part[offset:].startswith(exp_encoding):
+                    offset += len(exp_encoding)
+                    break
+
+            # Try to identify the modulus length indicator
+            for mod_prefix in KeyParser.RSA_MODULUS_PREFIXES.values():
+                if base64_part[offset:].startswith(mod_prefix):
+                    offset += len(mod_prefix)
+                    break
+
+            return base64_part[offset:], offset
+
+        return None, None
+
+    @staticmethod
+    def get_matchable_length(key_type='ed25519'):
+        """Return the expected length of the matchable portion"""
+        if key_type == 'ed25519':
+            return 43  # 32 bytes in base64 ≈ 43 chars
+        elif key_type == 'rsa':
+            # This varies by key size, return None to indicate variable length
+            return None
+        return None
 
 class PatternSpec:
-    def __init__(self, pattern, anchor='anywhere', case_sensitive=False):
+    def __init__(self, pattern, anchor='anywhere', case_sensitive=False, key_type='ed25519'):
         self.pattern = pattern
         self.anchor = anchor
         self.case_sensitive = case_sensitive
+        self.key_type = key_type
         self._compiled = None
-        
+
+        # Validate pattern against key constraints
+        self._validate_pattern()
+
+   def _validate_pattern(self):
+        """Validate pattern against key type constraints"""
+        if self.key_type == 'ed25519':
+            max_length = KeyParser.get_matchable_length('ed25519')
+            patterns = self.pattern.split('|')
+
+            for p in patterns:
+                if len(p) > max_length:
+                    raise ValueError(
+                        f"Pattern '{p}' is too long for ed25519 key "
+                        f"(max {max_length} chars)"
+                    )
+
+                # Check if pattern could appear in base64
+                if not all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+                          for c in p if c not in '^$'):
+                    raise ValueError(
+                        f"Pattern '{p}' contains characters that cannot "
+                        "appear in base64-encoded data"
+                    )
+
     def compile(self):
         """Compile the pattern with appropriate anchors"""
         # Handle each pattern in the alternation separately
@@ -63,7 +130,6 @@ class PatternSpec:
         elif self.anchor == 'both':
             patterns = ['^' + p + '$' for p in patterns]
             
-        # Recombine with alternation
         pattern = '|'.join(f'({p})' for p in patterns)
         flags = 0 if self.case_sensitive else re.IGNORECASE
         self._compiled = re.compile(pattern, flags)
