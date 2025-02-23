@@ -4,106 +4,65 @@ import re
 import argparse
 from pathlib import Path
 import threading
+import multiprocessing
 import queue
 import time
+import psutil
+import json
+from datetime import datetime
+import platform
+import os
 
-class VanityKeyGenerator:
-    def __init__(self, email, output_dir=None, workers=4, key_type='ed25519', key_bits=2048):
+
+class PatternSpec:
+    def __init__(self, pattern, anchor='anywhere', case_sensitive=False):
+        self.pattern = pattern
+        self.anchor = anchor
+        self.case_sensitive = case_sensitive
+        self._compiled = None
+        
+    def compile(self):
+        """Compile the pattern with appropriate anchors"""
+        # Handle each pattern in the alternation separately
+        patterns = self.pattern.split('|')
+        
+        # For end/start anchoring, we need to apply the anchor to each alternative
+        if self.anchor == 'start':
+            patterns = ['^' + p for p in patterns]
+        elif self.anchor == 'end':
+            patterns = [p + '$' for p in patterns]
+        elif self.anchor == 'both':
+            patterns = ['^' + p + '$' for p in patterns]
+            
+        # Recombine with alternation
+        pattern = '|'.join(f'({p})' for p in patterns)
+        
+        flags = 0 if self.case_sensitive else re.IGNORECASE
+        self._compiled = re.compile(pattern, flags)
+        return self._compiled
+
+    def match(self, text):
+        """Try to match the pattern against text"""
+        if not self._compiled:
+            self.compile()
+        return self._compiled.search(text)
+
+
+class MemorableKeyBenchmark:
+    def __init__(self, email, patterns, key_type='ed25519', key_bits=2048):
         self.email = email
-        self.output_dir = Path(output_dir) if output_dir else Path.cwd()
-        self.workers = workers
+        self.patterns = patterns  # List of PatternSpec objects
         self.key_type = key_type
         self.key_bits = key_bits
-        self.found_key = threading.Event()
-        self.result_queue = queue.Queue()
-        
-        self.stats = {
-            'attempts': 0,
-            'start_time': None
-        }
-        
-    def _load_wordlist(self, wordlist_path, min_word_length):
-        """Load wordlist into a set for efficient lookup"""
-        with open(wordlist_path) as f:
-            words = {word.strip() for word in f 
-                    if len(word.strip()) >= min_word_length}
-        return words
+        self.found_key = multiprocessing.Event()
+        self.result_queue = multiprocessing.Queue()
+        self.stats = BenchmarkStats()
 
-    def _check_wordlist_match(self, key_part, words, anchor, case_sensitive):
-        """Check if any word from wordlist matches according to anchor rules"""
-        if not case_sensitive:
-            key_part = key_part.lower()
-            # Create lowercase version of words if needed
-            words = {w.lower() for w in words}
-
-        for word in words:
-            if anchor == 'start' and key_part.startswith(word):
-                return word, (0, len(word))
-            elif anchor == 'end' and key_part.endswith(word):
-                return word, (len(key_part) - len(word), len(key_part))
-            elif anchor == 'both' and key_part == word:
-                return word, (0, len(word))
-            elif anchor == 'anywhere' and word in key_part:
-                pos = key_part.index(word)
-                return word, (pos, pos + len(word))
-        return None, None
-
-    def generate_key(self, pattern=None, anchor='anywhere', case_sensitive=False, 
-                     wordlist=None, min_word_length=4):
-        """Generate keys until criteria are met"""
-        self.stats['start_time'] = time.time()
-        threads = []
-        
-        # Handle regex pattern if provided
-        compiled_pattern = None
-        if pattern:
-            if anchor == 'start':
-                pattern = '^' + pattern
-            elif anchor == 'end':
-                pattern = pattern + '$'
-            elif anchor == 'both':
-                pattern = '^' + pattern + '$'
-            flags = 0 if case_sensitive else re.IGNORECASE
-            compiled_pattern = re.compile(pattern, flags)
-            
-        # Load wordlist if provided
-        wordlist_words = None
-        if wordlist:
-            wordlist_words = self._load_wordlist(wordlist, min_word_length)
-            if not wordlist_words:
-                raise ValueError("No valid words found in wordlist")
-                
-        if not (compiled_pattern or wordlist_words):
-            raise ValueError("No pattern or wordlist specified")
-            
-        # Start worker threads
-        for i in range(self.workers):
-            t = threading.Thread(
-                target=self._key_worker,
-                args=(i, compiled_pattern, wordlist_words, anchor, case_sensitive),
-                daemon=True
-            )
-            threads.append(t)
-            t.start()
-            
-        # Wait for a result
-        result = self.result_queue.get()
-        self.found_key.set()  # Signal other threads to stop
-        
-        # Save the winning key
-        keyfile = self.output_dir / f"vanity_key_{int(time.time())}"
-        with open(keyfile, 'w') as f:
-            f.write(result['private'])
-        with open(f"{keyfile}.pub", 'w') as f:
-            f.write(result['public'])
-            
-        return result, keyfile
-        
-    def _key_worker(self, worker_id, pattern, wordlist_words, anchor, case_sensitive):
-        """Worker thread to generate and test keys"""
+    def _key_worker(self, worker_id):
+        """Worker process to generate and test keys"""
         while not self.found_key.is_set():
-            # Generate a new key pair
-            key_file = f"temp_key_{worker_id}"
+                      # Generate a new key pair
+            key_file = f"temp_key_{os.getpid()}_{worker_id}"
             cmd = ['ssh-keygen']
             
             if self.key_type == 'ed25519':
@@ -122,93 +81,308 @@ class VanityKeyGenerator:
             ])
             
             subprocess.run(cmd)
-            
-            # Read the public key
-            with open(f"{key_file}.pub") as f:
-                pubkey = f.read().strip()
-            with open(key_file) as f:
-                privkey = f.read()
+              
+            try:
+                # Read the public key
+                with open(f"{key_file}.pub") as f:
+                    pubkey = f.read().strip()
+                with open(key_file) as f:
+                    privkey = f.read()
+                    
+                # Extract ONLY the base64 key portion (careful to exclude key type and comment)
+                key_parts = pubkey.split()
+                if len(key_parts) < 2:
+                    continue  # Malformed key
+                    
+                key_part = key_parts[1]  # Just the base64 portion
                 
-            # Clean up temporary files
-            Path(key_file).unlink()
-            Path(f"{key_file}.pub").unlink()
+                # Validate it looks like base64
+                if not re.match(r'^[A-Za-z0-9+/]+={0,2}$', key_part):
+                    continue  # Not valid base64
+                
+                # Update statistics
+                self.stats.increment_attempts()
+                
+                # Check all patterns
+                for pattern_spec in self.patterns:
+                    match = pattern_spec.match(key_part)
+                    if match:
+                        self.result_queue.put({
+                            'public': pubkey,
+                            'private': privkey,
+                            'matched_part': key_part,
+                            'match': match.group(0),
+                            'match_position': match.span(),
+                            'worker_id': worker_id,
+                            'process_id': os.getpid(),
+                            'pattern': pattern_spec.pattern,
+                            'anchor': pattern_spec.anchor
+                        })
+                        self.found_key.set()
+                        break
+            finally:
+                # Clean up temporary files
+                try:
+                    Path(key_file).unlink()
+                    Path(f"{key_file}.pub").unlink()
+                except FileNotFoundError:
+                    pass
+
+    def _metrics_recorder(self):
+        """Thread to record performance metrics"""
+        while not self.found_key.is_set():
+            self.stats.record_metrics()
+            time.sleep(self.stats.sampling_interval)
             
-            # Extract the key portion
-            key_part = pubkey.split()[1]
+    def run_benchmark(self):
+        """Run the benchmark with multiple processes"""
+        pattern = self._compile_pattern()
+        processes = []
+        
+        # Start metrics recording thread
+        metrics_thread = threading.Thread(target=self._metrics_recorder, daemon=True)
+        metrics_thread.start()
+        
+        # Start worker processes
+        for i in range(multiprocessing.cpu_count()):
+            p = multiprocessing.Process(
+                target=self._key_worker,
+                args=(i, pattern),
+                daemon=True
+            )
+            processes.append(p)
+            p.start()
             
-            # Update statistics
-            with threading.Lock():
-                self.stats['attempts'] += 1
+        # Wait for a result
+        result = self.result_queue.get()
+        duration = time.time() - self.stats.start_time
+        
+        # Clean up processes
+        for p in processes:
+            p.terminate()
             
-            # Check for matches
-            match_word = None
-            match_pos = None
+        # Calculate final statistics
+        benchmark_stats = self.stats.calculate_statistics(duration)
+        
+        # Add system information
+        system_info = {
+            'cpu_model': platform.processor(),
+            'cpu_count': multiprocessing.cpu_count(),
+            'physical_cores': psutil.cpu_count(logical=False),
+            'logical_cores': psutil.cpu_count(logical=True),
+            'memory_gb': psutil.virtual_memory().total / (1024**3),
+            'platform': platform.platform()
+        }
+        
+        # Combine all results
+        benchmark_results = {
+            'timestamp': datetime.now().isoformat(),
+            'system_info': system_info,
+            'benchmark_config': {
+                'pattern': self.pattern,
+                'anchor': self.anchor,
+                'case_sensitive': self.case_sensitive,
+                'key_type': self.key_type,
+                'key_bits': self.key_bits
+            },
+            'performance_metrics': benchmark_stats,
+            'winning_key': {
+                'worker_id': result['worker_id'],
+                'process_id': result['process_id'],
+                'match': result['match'],
+                'match_position': result['match_position']
+            }
+        }
+        
+        return result, benchmark_results
+    def run_benchmark(self):
+        """Run the benchmark with multiple processes"""
+        processes = []
+
+        # Start metrics recording thread
+        metrics_thread = threading.Thread(target=self._metrics_recorder, daemon=True)
+        metrics_thread.start()
+
+        # Start worker processes
+        for i in range(multiprocessing.cpu_count()):
+            p = multiprocessing.Process(
+                target=self._key_worker,
+                args=(i,),
+                daemon=True
+            )
+            processes.append(p)
+            p.start()
+
+        # Wait for a result
+        result = self.result_queue.get()
+        duration = time.time() - self.stats.start_time
+
+        # Clean up processes
+        for p in processes:
+            p.terminate()
+
+        # Calculate final statistics
+        benchmark_stats = self.stats.calculate_statistics(duration)
+
+        # Add system information
+        system_info = {
+            'cpu_model': platform.processor(),
+            'cpu_count': multiprocessing.cpu_count(),
+            'physical_cores': psutil.cpu_count(logical=False),
+            'logical_cores': psutil.cpu_count(logical=True),
+            'memory_gb': psutil.virtual_memory().total / (1024**3),
+            'platform': platform.platform()
+        }
+
+        # Combine all results
+        benchmark_results = {
+            'timestamp': datetime.now().isoformat(),
+            'system_info': system_info,
+            'benchmark_config': {
+                'patterns': [
+                    {
+                        'pattern': p.pattern,
+                        'anchor': p.anchor,
+                        'case_sensitive': p.case_sensitive
+                    }
+                    for p in self.patterns
+                ],
+                'key_type': self.key_type,
+                'key_bits': self.key_bits
+            },
+            'performance_metrics': benchmark_stats,
+            'winning_key': {
+                'worker_id': result['worker_id'],
+                'process_id': result['process_id'],
+                'pattern': result['pattern'],
+                'anchor': result['anchor'],
+                'match': result['match'],
+                'match_position': result['match_position']
+            }
+        }
+
+        return result, benchmark_results
+
+class BenchmarkStats:
+    def __init__(self):
+        self.start_time = time.time()
+        self.attempts = multiprocessing.Value('i', 0)
+        self.keys_per_second = []
+        self.cpu_freqs = []
+        self.cpu_temps = []
+        self.sampling_interval = 0.5  # seconds
+        
+    def increment_attempts(self):
+        with self.attempts.get_lock():
+            self.attempts.value += 1
             
-            # Check regex pattern if provided
-            if pattern:
-                match = pattern.search(key_part)
-                if match:
-                    match_word = match.group(0)
-                    match_pos = match.span()
+    def get_attempts(self):
+        return self.attempts.value
+    
+    def record_metrics(self):
+        """Record current CPU metrics"""
+        cpu_freqs = []
+        for cpu in range(psutil.cpu_count()):
+            try:
+                freq = psutil.cpu_freq(percpu=True)
+                if freq:
+                    cpu_freqs.append(freq[cpu].current)
+            except Exception:
+                pass
+                
+        self.cpu_freqs.append(cpu_freqs)
+        
+        # Try to get CPU temperatures if available
+        try:
+            temps = psutil.sensors_temperatures()
+            if 'coretemp' in temps:
+                self.cpu_temps.append([t.current for t in temps['coretemp']])
+        except Exception:
+            pass
             
-            # Check wordlist if provided and no regex match found
-            if wordlist_words and not match_word:
-                match_word, match_pos = self._check_wordlist_match(
-                    key_part, wordlist_words, anchor, case_sensitive
-                )
-            
-            if match_word:
-                self.result_queue.put({
-                    'public': pubkey,
-                    'private': privkey,
-                    'matched_part': key_part,
-                    'match': match_word,
-                    'match_position': match_pos
-                })
-                break
+    def calculate_statistics(self, duration):
+        """Calculate final statistics"""
+        total_attempts = self.get_attempts()
+        keys_per_second = total_attempts / duration
+        
+        # Calculate CPU frequency statistics
+        freq_stats = {
+            'min': min(min(f) for f in self.cpu_freqs if f),
+            'max': max(max(f) for f in self.cpu_freqs if f),
+            'avg': sum(sum(f)/len(f) for f in self.cpu_freqs if f) / len(self.cpu_freqs)
+        } if self.cpu_freqs else {}
+        
+        # Calculate temperature statistics if available
+        temp_stats = {
+            'min': min(min(t) for t in self.cpu_temps if t),
+            'max': max(max(t) for t in self.cpu_temps if t),
+            'avg': sum(sum(t)/len(t) for t in self.cpu_temps if t) / len(self.cpu_temps)
+        } if self.cpu_temps else {}
+        
+        return {
+            'total_attempts': total_attempts,
+            'duration': duration,
+            'keys_per_second': keys_per_second,
+            'keys_per_second_per_worker': keys_per_second / multiprocessing.cpu_count(),
+            'cpu_frequency_mhz': freq_stats,
+            'cpu_temperature_c': temp_stats
+        }
+        return result, benchmark_results
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate SSH keys with vanity patterns"
+        description="Benchmark SSH key generation with complex pattern matching"
     )
     parser.add_argument(
         '--email', '-e',
         required=True,
         help='Email address for key comment'
     )
+    
+    # Pattern group arguments
     parser.add_argument(
-        '--pattern', '-p',
-        help='Regular expression pattern to match in the key'
+        '--anywhere-pattern', '-ap',
+        action='append',
+        help='Pattern to match anywhere in the key'
     )
     parser.add_argument(
-        '--anchor', '-a',
-        choices=['start', 'end', 'both', 'anywhere'],
-        default='anywhere',
-        help='Where to anchor the pattern or wordlist matches'
+        '--start-pattern', '-sp',
+        action='append',
+        help='Pattern that must match at start of key'
     )
     parser.add_argument(
-        '--case-sensitive', '-c',
+        '--end-pattern', '-ep',
+        action='append',
+        help='Pattern that must match at end of key'
+    )
+    parser.add_argument(
+        '--exact-pattern', '-xp',
+        action='append',
+        help='Pattern that must match exactly (both start and end)'
+    )
+    
+    # Case sensitivity can be specified per pattern group
+    parser.add_argument(
+        '--case-sensitive-anywhere', '-ca',
         action='store_true',
-        help='Make pattern and wordlist matching case-sensitive'
+        help='Make anywhere patterns case-sensitive'
     )
     parser.add_argument(
-        '--wordlist', '-w',
-        help='Path to wordlist file for finding embedded words'
+        '--case-sensitive-start', '-cs',
+        action='store_true',
+        help='Make start patterns case-sensitive'
     )
     parser.add_argument(
-        '--min-word-length', '-l',
-        type=int, default=4,
-        help='Minimum length for matching words from wordlist'
+        '--case-sensitive-end', '-ce',
+        action='store_true',
+        help='Make end patterns case-sensitive'
     )
     parser.add_argument(
-        '--output-dir', '-o',
-        help='Directory to store generated keys'
+        '--case-sensitive-exact', '-cx',
+        action='store_true',
+        help='Make exact patterns case-sensitive'
     )
-    parser.add_argument(
-        '--workers', '-n',
-        type=int, default=4,
-        help='Number of worker threads'
-    )
+    
     parser.add_argument(
         '--key-type', '-t',
         choices=['ed25519', 'rsa'],
@@ -221,38 +395,77 @@ def main():
         default=2048,
         help='Bits for RSA key (ignored for ed25519)'
     )
+    parser.add_argument(
+        '--output', '-o',
+        help='Output file for benchmark results (JSON)'
+    )
     
     args = parser.parse_args()
     
-    if not (args.pattern or args.wordlist):
-        parser.error("Either --pattern or --wordlist must be specified")
+    # Collect all patterns
+    patterns = []
     
-    generator = VanityKeyGenerator(
+    if args.anywhere_pattern:
+        for p in args.anywhere_pattern:
+            patterns.append(PatternSpec(p, 'anywhere', args.case_sensitive_anywhere))
+            
+    if args.start_pattern:
+        for p in args.start_pattern:
+            patterns.append(PatternSpec(p, 'start', args.case_sensitive_start))
+            
+    if args.end_pattern:
+        for p in args.end_pattern:
+            patterns.append(PatternSpec(p, 'end', args.case_sensitive_end))
+            
+    if args.exact_pattern:
+        for p in args.exact_pattern:
+            patterns.append(PatternSpec(p, 'both', args.case_sensitive_exact))
+    
+    if not patterns:
+        parser.error("At least one pattern must be specified")
+    
+    benchmark = MemorableKeyBenchmark(
         args.email,
-        args.output_dir,
-        args.workers,
+        patterns,
         args.key_type,
         args.key_bits
     )
     
-    print("Generating vanity SSH key...")
+    print(f"Starting benchmark with {multiprocessing.cpu_count()} processes...")
     start_time = time.time()
     
-    result, keyfile = generator.generate_key(
-        args.pattern,
-        args.anchor,
-        args.case_sensitive,
-        args.wordlist,
-        args.min_word_length
-    )
+    result, benchmark_results = benchmark.run_benchmark()
+
+    # Print summary
+    print("\nBenchmark Results:")
+    print(f"Found matching key in {benchmark_results['performance_metrics']['duration']:.2f} seconds")
+    print(f"Total attempts: {benchmark_results['performance_metrics']['total_attempts']}")
+    print(f"Keys per second: {benchmark_results['performance_metrics']['keys_per_second']:.2f}")
+    print(f"Keys per second per worker: {benchmark_results['performance_metrics']['keys_per_second_per_worker']:.2f}")
     
-    elapsed = time.time() - start_time
-    attempts = generator.stats['attempts']
+    if benchmark_results['performance_metrics']['cpu_frequency_mhz']:
+        freq = benchmark_results['performance_metrics']['cpu_frequency_mhz']
+        print(f"\nCPU Frequency (MHz):")
+        print(f"  Min: {freq['min']:.0f}")
+        print(f"  Max: {freq['max']:.0f}")
+        print(f"  Avg: {freq['avg']:.0f}")
+        
+    if benchmark_results['performance_metrics']['cpu_temperature_c']:
+        temp = benchmark_results['performance_metrics']['cpu_temperature_c']
+        print(f"\nCPU Temperature (°C):")
+        print(f"  Min: {temp['min']:.1f}")
+        print(f"  Max: {temp['max']:.1f}")
+        print(f"  Avg: {temp['avg']:.1f}")
     
-    print(f"\nFound matching key in {elapsed:.2f} seconds after {attempts} attempts!")
-    print(f"Key files saved as: {keyfile}")
+    print(f"\nMatching Key:")
     print(f"Public key: {result['public']}")
     print(f"Matched pattern '{result['match']}' at position {result['match_position']}")
+    print(f"Found by worker {result['worker_id']} (PID: {result['process_id']})")
+    
+    if args.output:
+        with open(args.output, 'w') as f:
+            json.dump(benchmark_results, f, indent=2)
+        print(f"\nDetailed benchmark results saved to: {args.output}")
 
 if __name__ == '__main__':
     main()
