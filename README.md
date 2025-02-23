@@ -154,6 +154,7 @@ ED25519 key generation is much faster (often by orders of magnitude)
 In my testing, ED25519 key generation is typically 5-10x faster than RSA-2048 for this purpose. I didn't even try with RSA4096 but I'd imagine the obvious.
 
 ----
+### this section is still being written
 
 According to [RFC8709](https://datatracker.ietf.org/doc/html/rfc8709):
 ```
