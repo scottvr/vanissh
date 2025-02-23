@@ -23,22 +23,59 @@ class VanityKeyGenerator:
             'start_time': None
         }
         
-    def generate_key(self, prefix=None, suffix=None, wordlist=None, min_word_length=4):
-        """Generate keys until criteria are met"""
-        threads = []
+    def _compile_pattern(self, pattern, anchor, case_sensitive, wordlist, min_word_length):
+        """Compile regex pattern from various inputs"""
+        patterns = []
         
-        # Load wordlist if provided
-        target_words = set()
+        # Add user-specified pattern if provided
+        if pattern:
+            patterns.append(pattern)
+            
+        # Add wordlist patterns if provided
         if wordlist:
             with open(wordlist) as f:
-                target_words = {word.strip().lower() for word in f 
-                              if len(word.strip()) >= min_word_length}
+                words = {word.strip() for word in f 
+                        if len(word.strip()) >= min_word_length}
+                # Escape special regex chars in words
+                words = {re.escape(word) for word in words}
+                if words:
+                    patterns.append(f"({'|'.join(words)})")
+                    
+        if not patterns:
+            raise ValueError("No pattern specified (use --pattern or --wordlist)")
+            
+        # Combine patterns with OR
+        combined = '|'.join(f'({p})' for p in patterns)
+        
+        # Apply anchoring
+        if anchor == 'start':
+            combined = '^' + combined
+        elif anchor == 'end':
+            combined = combined + '$'
+        elif anchor == 'both':
+            combined = '^' + combined + '$'
+        # 'anywhere' needs no anchors
+        
+        # Compile with case sensitivity flag
+        flags = 0 if case_sensitive else re.IGNORECASE
+        return re.compile(combined, flags)
+        
+    def generate_key(self, pattern=None, anchor='anywhere', case_sensitive=False, 
+                     wordlist=None, min_word_length=4):
+        """Generate keys until criteria are met"""
+        self.stats['start_time'] = time.time()
+        threads = []
+        
+        # Compile the regex pattern based on inputs
+        compiled_pattern = self._compile_pattern(
+            pattern, anchor, case_sensitive, wordlist, min_word_length
+        )
         
         # Start worker threads
         for i in range(self.workers):
             t = threading.Thread(
                 target=self._key_worker,
-                args=(i, prefix, suffix, target_words),
+                args=(i, compiled_pattern),
                 daemon=True
             )
             threads.append(t)
@@ -56,8 +93,8 @@ class VanityKeyGenerator:
             f.write(result['public'])
             
         return result, keyfile
-    
-    def _key_worker(self, worker_id, prefix, suffix, target_words):
+        
+    def _key_worker(self, worker_id, pattern):
         """Worker thread to generate and test keys"""
         while not self.found_key.is_set():
             # Generate a new key pair
@@ -81,10 +118,6 @@ class VanityKeyGenerator:
             
             subprocess.run(cmd)
             
-            # Update statistics
-            with threading.Lock():
-                self.stats['attempts'] += 1
-            
             # Read the public key
             with open(f"{key_file}.pub") as f:
                 pubkey = f.read().strip()
@@ -98,43 +131,25 @@ class VanityKeyGenerator:
             # Extract the key portion (between ssh-ed25519 and the email)
             key_part = pubkey.split()[1]
             
-            # Check if key matches criteria
-            if self._matches_criteria(key_part, prefix, suffix, target_words):
+            # Update statistics
+            with threading.Lock():
+                self.stats['attempts'] += 1
+            
+            # Try to find match
+            match = pattern.search(key_part)
+            if match:
                 self.result_queue.put({
                     'public': pubkey,
                     'private': privkey,
-                    'matched_part': key_part
+                    'matched_part': key_part,
+                    'match': match.group(0),
+                    'match_position': match.span()
                 })
                 break
-    
-    def _matches_criteria(self, key_part, prefix, suffix, target_words, pattern=None):
-        """Check if key matches any of the specified criteria"""
-        if prefix and not key_part.startswith(prefix):
-            return False
-            
-        if suffix and not key_part.endswith(suffix):
-            return False
-            
-        if pattern:
-            import re
-            if not re.search(pattern, key_part):
-                return False
-                
-        if target_words:
-            # Look for any target word in the key
-            key_lower = key_part.lower()
-            for word in target_words:
-                if word in key_lower:
-                    return True
-            if target_words:  # If we had words but found none
-                return False
-            
-        # If we got here and had any criteria, we matched them all
-        return True if (prefix or suffix or pattern or target_words) else False
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate SSH ED25519 keys with memorable patterns"
+        description="Generate SSH keys with vanity patterns"
     )
     parser.add_argument(
         '--email', '-e',
@@ -142,21 +157,28 @@ def main():
         help='Email address for key comment'
     )
     parser.add_argument(
-        '--prefix', '-p',
-        help='Desired prefix for the key'
+        '--pattern', '-p',
+        help='Regular expression pattern to match in the key'
     )
     parser.add_argument(
-        '--suffix', '-s',
-        help='Desired suffix for the key'
+        '--anchor', '-a',
+        choices=['start', 'end', 'both', 'anywhere'],
+        default='anywhere',
+        help='Where to anchor the pattern in the key'
+    )
+    parser.add_argument(
+        '--case-sensitive', '-c',
+        action='store_true',
+        help='Make pattern matching case-sensitive'
     )
     parser.add_argument(
         '--wordlist', '-w',
-        help='Path to wordlist file for finding embedded words'
+        help='Path to wordlist file for finding embedded words (will be converted to regex)'
     )
     parser.add_argument(
         '--min-word-length', '-l',
         type=int, default=4,
-        help='Minimum length for matching words'
+        help='Minimum length for matching words from wordlist'
     )
     parser.add_argument(
         '--output-dir', '-o',
@@ -185,25 +207,29 @@ def main():
     generator = VanityKeyGenerator(
         args.email,
         args.output_dir,
-        args.workers
+        args.workers,
+        args.key_type,
+        args.key_bits
     )
     
     print("Generating vanity SSH key...")
     start_time = time.time()
     
     result, keyfile = generator.generate_key(
-        args.prefix,
-        args.suffix,
+        args.pattern,
+        args.anchor,
+        args.case_sensitive,
         args.wordlist,
         args.min_word_length
     )
     
     elapsed = time.time() - start_time
+    attempts = generator.stats['attempts']
     
-    print(f"\nFound matching key in {elapsed:.2f} seconds!")
+    print(f"\nFound matching key in {elapsed:.2f} seconds after {attempts} attempts!")
     print(f"Key files saved as: {keyfile}")
     print(f"Public key: {result['public']}")
-    print(f"Matched pattern: {result['matched_part']}")
+    print(f"Matched pattern '{result['match']}' at position {result['match_position']}")
 
 if __name__ == '__main__':
     main()
