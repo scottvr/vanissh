@@ -137,9 +137,9 @@ Of course, the more characters in your pattern and the more constraints you spec
 But, that's an average, over time, given enough generations.. I'm not a statistician and *I* know why; perhaps you will all soon know why as well as I try to explain some things. 
 
 
-# Some Thoughts and Learnings along the way.
+## Some Thoughts and Learnings along the way.
 
-These examples above are from a very old T2.micro instance, and its single core generates, then does the strings matching, etc consistently at a rate of about 170 keys/second.
+These examples above are output from running vanissh on a very old T2.micro instance, and its single core generates, then does the strings matching, etc consistently at a rate of about 170 keys/second.
 The tool has benchmarking code, but I've yet to run it on any other machines as I still haven't even finished this initial documentation. 
 
 But something occurred to me, that seemed obvious and intuitive at first: "Hey, an RSA key has a lot more Base64-encoded text; it's much longer - surely that would vastly increase our chances of finding an "anywhere" match and thus speed this sucker up. I should add rsa2048 support"
