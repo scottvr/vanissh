@@ -22,7 +22,7 @@ I chuckled at this notion that brought forth vague impressions of BTC vanity add
 
 So naturally a tool started taking shape in my mind that would take a string, or perhaps a wordlist, and maybe even allow the user to specify where they would like to see the string... hmmm.
 
-Had several _almost there_ iterations, allowing for a "prefix" or "suffix" or "anywhere" placement of the target string, eventually letting the user supply a regex instead of just a string or wordlist, and re-implementing the "where to match" arguments. (Note, I learned more than about ssh keys in one night than I had in the previous 30 years, and for the interested, there will be a section of this README that covers what I have learned, just to pass it on.)
+Had several _almost there_ iterations, allowing for a "prefix" or "suffix" or "anywhere" placement of the target string, eventually letting the user supply a regex instead of just a string or wordlist, and re-implementing the "where to match" arguments. In the process of some trial-and-error learning and attempts at optimization (I'm sure there's lots that can still be done to make it more performant) I ended up learning in one night things I hadn't ever learned about ssh keys in the previous 30 years so a portion of this README will share that journey. But first...
 
 # Usage
 
@@ -64,6 +64,37 @@ optional arguments:
                         Output file for benchmark results (JSON)
 
 # Examples
+
+You may wonder about the awkwardly-man specific command-line arguments, so I'll explain simple that they are there to enable flexibility on a single command invocation, in order to save time by increasing the chances *something* will match that you'll be please with. (Though there's still room for improvement such as allowing for ANDing multiple arguments or negative patterns. Of course, if you're determined enough since your patterns can be a valid regex, you can roll your own ANDing and negatives and anything else your regex-fu might enable.)
+
+## This example below is a way to generate a public key that matches
+- any of "31337", "leet", "l33t", "elite" anywhere in the key's Base64-encoded string
+- "el8" either as the first or last three characters of the key's Base64-encoded string
+```bash
+python ssh-key-mem-bench-v2.py -e you@example.com \
+    -ap "31337|leet|l33t|elite" \
+    -ep "el8" \
+    -sp "el8"
+```
+
+## Mix and match with position-specific case sensitivity (again, regex could handle this for you if you care to roll your own)
+```bash
+python ssh-key-mem-bench-v2.py -e you@example.com \
+    -ap "l33t|elite" -ca \
+    -ep "cool" \
+    -sp "HACK" -cs
+```
+
+## Multiple patterns per position
+```bash
+python ssh-key-mem-bench-v2.py -e you@example.com \
+    -ap "l33t" -ap "elite" \
+    -ep "er" -ep "or" \
+    -xp "ABCD"
+```
+(and again, since it's all "OR" logic of terms at this point, the first example with the pipe-separated terms would be another way to accomplish the same.)
+
+# some output examples
 ```bash
 # python src/vanissh.py -e foo@bar.baz -ap 13
 Starting benchmark with 1 processes...
@@ -84,6 +115,7 @@ Public key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILEYnLgpraYTF/Wq+zxSs+fpuOfxSwJ9
 Matched pattern '13' at position (63, 65)
 Found by worker 0 (PID: 28494)
 ```
+
 Obviously, that one was quite fast.  Of course, the more characters in your pattern and the more constraints you specify (position, case-sensitivity) the longer the average time for you to generate a winning vanity key will be.
 
 But, of course.. that's an average, over time, given enough generations.. I'm not a statistician and *I* know why; perhaps you will all soon know why as well as I try to explain some things. 
