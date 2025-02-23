@@ -17,65 +17,70 @@ class VanityKeyGenerator:
         self.found_key = threading.Event()
         self.result_queue = queue.Queue()
         
-        # Track statistics
         self.stats = {
             'attempts': 0,
             'start_time': None
         }
         
-    def _compile_pattern(self, pattern, anchor, case_sensitive, wordlist, min_word_length):
-        """Compile regex pattern from various inputs"""
-        patterns = []
-        
-        # Add user-specified pattern if provided
-        if pattern:
-            patterns.append(pattern)
-            
-        # Add wordlist patterns if provided
-        if wordlist:
-            with open(wordlist) as f:
-                words = {word.strip() for word in f 
-                        if len(word.strip()) >= min_word_length}
-                # Escape special regex chars in words
-                words = {re.escape(word) for word in words}
-                if words:
-                    patterns.append(f"({'|'.join(words)})")
-                    
-        if not patterns:
-            raise ValueError("No pattern specified (use --pattern or --wordlist)")
-            
-        # Combine patterns with OR
-        combined = '|'.join(f'({p})' for p in patterns)
-        
-        # Apply anchoring
-        if anchor == 'start':
-            combined = '^' + combined
-        elif anchor == 'end':
-            combined = combined + '$'
-        elif anchor == 'both':
-            combined = '^' + combined + '$'
-        # 'anywhere' needs no anchors
-        
-        # Compile with case sensitivity flag
-        flags = 0 if case_sensitive else re.IGNORECASE
-        return re.compile(combined, flags)
-        
+    def _load_wordlist(self, wordlist_path, min_word_length):
+        """Load wordlist into a set for efficient lookup"""
+        with open(wordlist_path) as f:
+            words = {word.strip() for word in f 
+                    if len(word.strip()) >= min_word_length}
+        return words
+
+    def _check_wordlist_match(self, key_part, words, anchor, case_sensitive):
+        """Check if any word from wordlist matches according to anchor rules"""
+        if not case_sensitive:
+            key_part = key_part.lower()
+            # Create lowercase version of words if needed
+            words = {w.lower() for w in words}
+
+        for word in words:
+            if anchor == 'start' and key_part.startswith(word):
+                return word, (0, len(word))
+            elif anchor == 'end' and key_part.endswith(word):
+                return word, (len(key_part) - len(word), len(key_part))
+            elif anchor == 'both' and key_part == word:
+                return word, (0, len(word))
+            elif anchor == 'anywhere' and word in key_part:
+                pos = key_part.index(word)
+                return word, (pos, pos + len(word))
+        return None, None
+
     def generate_key(self, pattern=None, anchor='anywhere', case_sensitive=False, 
                      wordlist=None, min_word_length=4):
         """Generate keys until criteria are met"""
         self.stats['start_time'] = time.time()
         threads = []
         
-        # Compile the regex pattern based on inputs
-        compiled_pattern = self._compile_pattern(
-            pattern, anchor, case_sensitive, wordlist, min_word_length
-        )
-        
+        # Handle regex pattern if provided
+        compiled_pattern = None
+        if pattern:
+            if anchor == 'start':
+                pattern = '^' + pattern
+            elif anchor == 'end':
+                pattern = pattern + '$'
+            elif anchor == 'both':
+                pattern = '^' + pattern + '$'
+            flags = 0 if case_sensitive else re.IGNORECASE
+            compiled_pattern = re.compile(pattern, flags)
+            
+        # Load wordlist if provided
+        wordlist_words = None
+        if wordlist:
+            wordlist_words = self._load_wordlist(wordlist, min_word_length)
+            if not wordlist_words:
+                raise ValueError("No valid words found in wordlist")
+                
+        if not (compiled_pattern or wordlist_words):
+            raise ValueError("No pattern or wordlist specified")
+            
         # Start worker threads
         for i in range(self.workers):
             t = threading.Thread(
                 target=self._key_worker,
-                args=(i, compiled_pattern),
+                args=(i, compiled_pattern, wordlist_words, anchor, case_sensitive),
                 daemon=True
             )
             threads.append(t)
@@ -94,7 +99,7 @@ class VanityKeyGenerator:
             
         return result, keyfile
         
-    def _key_worker(self, worker_id, pattern):
+    def _key_worker(self, worker_id, pattern, wordlist_words, anchor, case_sensitive):
         """Worker thread to generate and test keys"""
         while not self.found_key.is_set():
             # Generate a new key pair
@@ -128,22 +133,37 @@ class VanityKeyGenerator:
             Path(key_file).unlink()
             Path(f"{key_file}.pub").unlink()
             
-            # Extract the key portion (between ssh-ed25519 and the email)
+            # Extract the key portion
             key_part = pubkey.split()[1]
             
             # Update statistics
             with threading.Lock():
                 self.stats['attempts'] += 1
             
-            # Try to find match
-            match = pattern.search(key_part)
-            if match:
+            # Check for matches
+            match_word = None
+            match_pos = None
+            
+            # Check regex pattern if provided
+            if pattern:
+                match = pattern.search(key_part)
+                if match:
+                    match_word = match.group(0)
+                    match_pos = match.span()
+            
+            # Check wordlist if provided and no regex match found
+            if wordlist_words and not match_word:
+                match_word, match_pos = self._check_wordlist_match(
+                    key_part, wordlist_words, anchor, case_sensitive
+                )
+            
+            if match_word:
                 self.result_queue.put({
                     'public': pubkey,
                     'private': privkey,
                     'matched_part': key_part,
-                    'match': match.group(0),
-                    'match_position': match.span()
+                    'match': match_word,
+                    'match_position': match_pos
                 })
                 break
 
@@ -164,16 +184,16 @@ def main():
         '--anchor', '-a',
         choices=['start', 'end', 'both', 'anywhere'],
         default='anywhere',
-        help='Where to anchor the pattern in the key'
+        help='Where to anchor the pattern or wordlist matches'
     )
     parser.add_argument(
         '--case-sensitive', '-c',
         action='store_true',
-        help='Make pattern matching case-sensitive'
+        help='Make pattern and wordlist matching case-sensitive'
     )
     parser.add_argument(
         '--wordlist', '-w',
-        help='Path to wordlist file for finding embedded words (will be converted to regex)'
+        help='Path to wordlist file for finding embedded words'
     )
     parser.add_argument(
         '--min-word-length', '-l',
@@ -203,6 +223,9 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    if not (args.pattern or args.wordlist):
+        parser.error("Either --pattern or --wordlist must be specified")
     
     generator = VanityKeyGenerator(
         args.email,
