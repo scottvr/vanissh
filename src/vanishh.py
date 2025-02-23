@@ -8,10 +8,12 @@ import queue
 import time
 
 class VanityKeyGenerator:
-    def __init__(self, email, output_dir=None, workers=4):
+    def __init__(self, email, output_dir=None, workers=4, key_type='ed25519', key_bits=2048):
         self.email = email
         self.output_dir = Path(output_dir) if output_dir else Path.cwd()
         self.workers = workers
+        self.key_type = key_type
+        self.key_bits = key_bits
         self.found_key = threading.Event()
         self.result_queue = queue.Queue()
         
@@ -60,14 +62,28 @@ class VanityKeyGenerator:
         while not self.found_key.is_set():
             # Generate a new key pair
             key_file = f"temp_key_{worker_id}"
-            subprocess.run([
-                'ssh-keygen',
-                '-t', 'ed25519',
+            cmd = ['ssh-keygen']
+            
+            if self.key_type == 'ed25519':
+                cmd.extend(['-t', 'ed25519'])
+            else:  # RSA
+                cmd.extend([
+                    '-t', 'rsa',
+                    '-b', str(self.key_bits)
+                ])
+                
+            cmd.extend([
                 '-f', key_file,
                 '-C', self.email,
                 '-N', '',
                 '-q'  # Quiet mode
             ])
+            
+            subprocess.run(cmd)
+            
+            # Update statistics
+            with threading.Lock():
+                self.stats['attempts'] += 1
             
             # Read the public key
             with open(f"{key_file}.pub") as f:
@@ -91,7 +107,7 @@ class VanityKeyGenerator:
                 })
                 break
     
-    def _matches_criteria(self, key_part, prefix, suffix, target_words):
+    def _matches_criteria(self, key_part, prefix, suffix, target_words, pattern=None):
         """Check if key matches any of the specified criteria"""
         if prefix and not key_part.startswith(prefix):
             return False
@@ -99,16 +115,22 @@ class VanityKeyGenerator:
         if suffix and not key_part.endswith(suffix):
             return False
             
+        if pattern:
+            import re
+            if not re.search(pattern, key_part):
+                return False
+                
         if target_words:
             # Look for any target word in the key
             key_lower = key_part.lower()
             for word in target_words:
                 if word in key_lower:
                     return True
-            return False
+            if target_words:  # If we had words but found none
+                return False
             
-        # If no criteria specified, any key is valid
-        return True if (prefix or suffix or target_words) else False
+        # If we got here and had any criteria, we matched them all
+        return True if (prefix or suffix or pattern or target_words) else False
 
 def main():
     parser = argparse.ArgumentParser(
@@ -144,6 +166,18 @@ def main():
         '--workers', '-n',
         type=int, default=4,
         help='Number of worker threads'
+    )
+    parser.add_argument(
+        '--key-type', '-t',
+        choices=['ed25519', 'rsa'],
+        default='ed25519',
+        help='Type of key to generate'
+    )
+    parser.add_argument(
+        '--key-bits', '-b',
+        type=int,
+        default=2048,
+        help='Bits for RSA key (ignored for ed25519)'
     )
     
     args = parser.parse_args()
