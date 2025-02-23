@@ -25,6 +25,7 @@ There were several _almost there_ iterations, allowing for a "prefix" or "suffix
 
 # Usage
 
+```bash
 usage: vanishh.py [-h] --email EMAIL [--anywhere-pattern ANYWHERE_PATTERN]
                   [--start-pattern START_PATTERN] [--end-pattern END_PATTERN]
                   [--exact-pattern EXACT_PATTERN] [--case-sensitive-anywhere]
@@ -32,9 +33,9 @@ usage: vanishh.py [-h] --email EMAIL [--anywhere-pattern ANYWHERE_PATTERN]
                   [--case-sensitive-exact] [--key-type {ed25519,rsa}]
                   [--key-bits KEY_BITS] [--output OUTPUT]
 vanishh.py: error: the following arguments are required: --email/-e
-
+```
 # Options
-
+```bash
 optional arguments:
   -h, --help            show this help message and exit
   --email EMAIL, -e EMAIL
@@ -61,7 +62,7 @@ optional arguments:
                         Bits for RSA key (ignored for ed25519)
   --output OUTPUT, -o OUTPUT
                         Output file for benchmark results (JSON)
-
+```
 # Examples
 
 You may wonder about the awkwardly-man specific command-line arguments, so I'll explain simple that they are there to enable flexibility on a single command invocation, in order to save time by increasing the chances *something* will match that you'll be please with. (Though there's still room for improvement such as allowing for ANDing multiple arguments or negative patterns. Of course, if you're determined enough since your patterns can be a valid regex, you can roll your own ANDing and negatives and anything else your regex-fu might enable.)
