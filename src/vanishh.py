@@ -13,6 +13,36 @@ from datetime import datetime
 import platform
 import os
 
+class KeyParser:
+    # Known headers for different key types
+    KEY_HEADERS = {
+        'ed25519': 'AAAAC3NzaC1lZDI1NTE5AAAA',
+        'rsa': 'AAAAB3NzaC1yc2EAAAADA'
+    }
+
+    @staticmethod
+    def extract_matchable_portion(pubkey, key_type='ed25519'):
+        """Extract only the meaningful portion of the key for pattern matching"""
+        parts = pubkey.split()
+        if len(parts) < 2:
+            return None
+
+        base64_part = parts[1]
+
+        # Remove any base64 padding
+        base64_part = base64_part.rstrip('=')
+
+        # Get the appropriate header
+        header = KeyParser.KEY_HEADERS.get(key_type)
+        if not header:
+            return None
+
+        # Ensure key starts with expected header
+        if not base64_part.startswith(header):
+            return None
+
+        # Return only the portion after the header
+        return base64_part[len(header):]
 
 class PatternSpec:
     def __init__(self, pattern, anchor='anywhere', case_sensitive=False):
@@ -26,7 +56,6 @@ class PatternSpec:
         # Handle each pattern in the alternation separately
         patterns = self.pattern.split('|')
         
-        # For end/start anchoring, we need to apply the anchor to each alternative
         if self.anchor == 'start':
             patterns = ['^' + p for p in patterns]
         elif self.anchor == 'end':
@@ -36,7 +65,6 @@ class PatternSpec:
             
         # Recombine with alternation
         pattern = '|'.join(f'({p})' for p in patterns)
-        
         flags = 0 if self.case_sensitive else re.IGNORECASE
         self._compiled = re.compile(pattern, flags)
         return self._compiled
@@ -48,7 +76,7 @@ class PatternSpec:
         return self._compiled.search(text)
 
 
-class MemorableKeyBenchmark:
+class VanityKeyBenchmark:
     def __init__(self, email, patterns, key_type='ed25519', key_bits=2048):
         self.email = email
         self.patterns = patterns  # List of PatternSpec objects
@@ -61,7 +89,7 @@ class MemorableKeyBenchmark:
     def _key_worker(self, worker_id):
         """Worker process to generate and test keys"""
         while not self.found_key.is_set():
-                      # Generate a new key pair
+            # Generate a new key pair
             key_file = f"temp_key_{os.getpid()}_{worker_id}"
             cmd = ['ssh-keygen']
             
@@ -83,36 +111,37 @@ class MemorableKeyBenchmark:
             subprocess.run(cmd)
               
             try:
-                # Read the public key
                 with open(f"{key_file}.pub") as f:
                     pubkey = f.read().strip()
                 with open(key_file) as f:
                     privkey = f.read()
-                    
-                # Extract ONLY the base64 key portion (careful to exclude key type and comment)
-                key_parts = pubkey.split()
-                if len(key_parts) < 2:
-                    continue  # Malformed key
-                    
-                key_part = key_parts[1]  # Just the base64 portion
-                
-                # Validate it looks like base64
-                if not re.match(r'^[A-Za-z0-9+/]+={0,2}$', key_part):
-                    continue  # Not valid base64
-                
+        
+                # Extract only the meaningful portion for matching
+                key_part = KeyParser.extract_matchable_portion(pubkey, self.key_type)
+                if not key_part:
+                    continue  # Invalid or unexpected key format
+
                 # Update statistics
                 self.stats.increment_attempts()
-                
-                # Check all patterns
+
+                # Store original key for reporting
+                full_key_part = pubkey.split()[1]
+
+                # Check all patterns against the meaningful portion
                 for pattern_spec in self.patterns:
                     match = pattern_spec.match(key_part)
                     if match:
+                        # Calculate the actual position in the full base64 string
+                        header_len = len(KeyParser.KEY_HEADERS[self.key_type])
+                        match_start = match.span()[0] + header_len
+                        match_end = match.span()[1] + header_len
+
                         self.result_queue.put({
                             'public': pubkey,
                             'private': privkey,
-                            'matched_part': key_part,
+                            'matched_part': full_key_part,
                             'match': match.group(0),
-                            'match_position': match.span(),
+                            'match_position': (match_start, match_end),
                             'worker_id': worker_id,
                             'process_id': os.getpid(),
                             'pattern': pattern_spec.pattern,
@@ -127,6 +156,7 @@ class MemorableKeyBenchmark:
                     Path(f"{key_file}.pub").unlink()
                 except FileNotFoundError:
                     pass
+
 
     def _metrics_recorder(self):
         """Thread to record performance metrics"""
@@ -424,7 +454,7 @@ def main():
     if not patterns:
         parser.error("At least one pattern must be specified")
     
-    benchmark = MemorableKeyBenchmark(
+    benchmark = VanityKeyBenchmark(
         args.email,
         patterns,
         args.key_type,
