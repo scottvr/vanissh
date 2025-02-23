@@ -153,7 +153,7 @@ class PatternSpec:
         return self._compiled.search(text)
 
 
-class VanityKeyBenchmark:
+class VanityKeyGeneration:
     def __init__(self, email, patterns, key_type='ed25519', key_bits=2048):
         self.email = email
         self.patterns = patterns  # List of PatternSpec objects
@@ -161,7 +161,7 @@ class VanityKeyBenchmark:
         self.key_bits = key_bits
         self.found_key = multiprocessing.Event()
         self.result_queue = multiprocessing.Queue()
-        self.stats = BenchmarkStats()
+        self.stats = GenerationStats()
 
     def _key_worker(self, worker_id):
         """Worker process to generate and test keys"""
@@ -248,8 +248,8 @@ class VanityKeyBenchmark:
             self.stats.record_metrics()
             time.sleep(self.stats.sampling_interval)
     
-    def run_benchmark(self):
-        """Run the benchmark with multiple processes"""
+    def run_generation(self):
+        """Run the generation with multiple processes"""
         processes = []
 
         # Start metrics recording thread
@@ -275,7 +275,7 @@ class VanityKeyBenchmark:
             p.terminate()
 
         # Calculate final statistics
-        benchmark_stats = self.stats.calculate_statistics(duration)
+        generation_stats = self.stats.calculate_statistics(duration)
 
         # Add system information
         system_info = {
@@ -288,10 +288,10 @@ class VanityKeyBenchmark:
         }
 
         # Combine all results
-        benchmark_results = {
+        generation_results = {
             'timestamp': datetime.now().isoformat(),
             'system_info': system_info,
-            'benchmark_config': {
+            'generation_config': {
                 'patterns': [
                     {
                         'pattern': p.pattern,
@@ -303,7 +303,7 @@ class VanityKeyBenchmark:
                 'key_type': self.key_type,
                 'key_bits': self.key_bits
             },
-            'performance_metrics': benchmark_stats,
+            'performance_metrics': generation_stats,
             'winning_key': {
                 'worker_id': result['worker_id'],
                 'process_id': result['process_id'],
@@ -314,9 +314,9 @@ class VanityKeyBenchmark:
             }
         }
 
-        return result, benchmark_results
+        return result, generation_results
 
-class BenchmarkStats:
+class GenerationStats:
     def __init__(self):
         self.start_time = time.time()
         self.attempts = multiprocessing.Value('i', 0)
@@ -380,11 +380,11 @@ class BenchmarkStats:
             'cpu_frequency_mhz': freq_stats,
             'cpu_temperature_c': temp_stats
         }
-        return result, benchmark_results
+        return result, generation_results
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark SSH key generation with complex pattern matching"
+        description="Vanity SSH key generation with complex pattern matching"
     )
     parser.add_argument(
         '--email', '-e',
@@ -450,7 +450,7 @@ def main():
     )
     parser.add_argument(
         '--output', '-o',
-        help='Output file for benchmark results (JSON)'
+        help='Output file for generation results (JSON)'
     )
     
     args = parser.parse_args()
@@ -477,34 +477,34 @@ def main():
     if not patterns:
         parser.error("At least one pattern must be specified")
     
-    benchmark = VanityKeyBenchmark(
+    generation = VanityKeyGeneration(
         args.email,
         patterns,
         args.key_type,
         args.key_bits
     )
     
-    print(f"Starting benchmark with {multiprocessing.cpu_count()} processes...")
+    print(f"Starting generation with {multiprocessing.cpu_count()} processes...")
     start_time = time.time()
     
-    result, benchmark_results = benchmark.run_benchmark()
+    result, generation_results = generation.run_generation()
 
     # Print summary
-    print("\nBenchmark Results:")
-    print(f"Found matching key in {benchmark_results['performance_metrics']['duration']:.2f} seconds")
-    print(f"Total attempts: {benchmark_results['performance_metrics']['total_attempts']}")
-    print(f"Keys per second: {benchmark_results['performance_metrics']['keys_per_second']:.2f}")
-    print(f"Keys per second per worker: {benchmark_results['performance_metrics']['keys_per_second_per_worker']:.2f}")
+    print("\nGeneration Results:")
+    print(f"Found matching key in {generation_results['performance_metrics']['duration']:.2f} seconds")
+    print(f"Total attempts: {generation_results['performance_metrics']['total_attempts']}")
+    print(f"Keys per second: {generation_results['performance_metrics']['keys_per_second']:.2f}")
+    print(f"Keys per second per worker: {generation_results['performance_metrics']['keys_per_second_per_worker']:.2f}")
     
-    if benchmark_results['performance_metrics']['cpu_frequency_mhz']:
-        freq = benchmark_results['performance_metrics']['cpu_frequency_mhz']
+    if generation_results['performance_metrics']['cpu_frequency_mhz']:
+        freq = generation_results['performance_metrics']['cpu_frequency_mhz']
         print(f"\nCPU Frequency (MHz):")
         print(f"  Min: {freq['min']:.0f}")
         print(f"  Max: {freq['max']:.0f}")
         print(f"  Avg: {freq['avg']:.0f}")
         
-    if benchmark_results['performance_metrics']['cpu_temperature_c']:
-        temp = benchmark_results['performance_metrics']['cpu_temperature_c']
+    if generation_results['performance_metrics']['cpu_temperature_c']:
+        temp = generation_results['performance_metrics']['cpu_temperature_c']
         print(f"\nCPU Temperature (°C):")
         print(f"  Min: {temp['min']:.1f}")
         print(f"  Max: {temp['max']:.1f}")
@@ -517,8 +517,8 @@ def main():
     
     if args.output:
         with open(args.output, 'w') as f:
-            json.dump(benchmark_results, f, indent=2)
-        print(f"\nDetailed benchmark results saved to: {args.output}")
+            json.dump(generation_results, f, indent=2)
+        print(f"\nDetailed generation results (benchmarks) saved to: {args.output}")
 
 if __name__ == '__main__':
     main()
