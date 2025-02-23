@@ -14,11 +14,8 @@ import platform
 import os
 
 class KeyParser:
-    # Known headers for different key types
-    KEY_HEADERS = {
-        'ed25519': 'AAAAC3NzaC1lZDI1NTE5AAAA',
-        'rsa': 'AAAAB3NzaC1yc2E'
-    }
+    ED25519_HEADER = 'AAAAC3NzaC1lZDI1NTE5AAAA'
+    RSA_HEADER = 'AAAAB3NzaC1yc2E'
     # Known RSA exponent patterns
     RSA_EXPONENTS = {
         3: 'AAAABAQ',
@@ -33,6 +30,15 @@ class KeyParser:
         2048: 'AAABAQ',
         4096: 'AAACAQ'  # Add more as needed
     }
+
+    @staticmethod
+    def get_header_length(key_type):
+        """Return the length of the header for the given key type"""
+        if key_type == 'ed25519':
+            return len(KeyParser.ED25519_HEADER)
+        elif key_type == 'rsa':
+            return len(KeyParser.RSA_HEADER)
+        return None
 
     @staticmethod
     def extract_matchable_portion(pubkey, key_type='ed25519'):
@@ -175,15 +181,15 @@ class VanityKeyBenchmark:
             ])
             
             subprocess.run(cmd)
-              
+            
             try:
                 with open(f"{key_file}.pub") as f:
                     pubkey = f.read().strip()
                 with open(key_file) as f:
                     privkey = f.read()
-        
+
                 # Extract only the meaningful portion for matching
-                key_part = KeyParser.extract_matchable_portion(pubkey, self.key_type)
+                key_part, offset = KeyParser.extract_matchable_portion(pubkey, self.key_type)
                 if not key_part:
                     continue  # Invalid or unexpected key format
 
@@ -197,10 +203,17 @@ class VanityKeyBenchmark:
                 for pattern_spec in self.patterns:
                     match = pattern_spec.match(key_part)
                     if match:
-                        # Calculate the actual position in the full base64 string
-                        header_len = len(KeyParser.KEY_HEADERS[self.key_type])
-                        match_start = match.span()[0] + header_len
-                        match_end = match.span()[1] + header_len
+                        # Use the offset returned from extract_matchable_portion
+                        match_start = match.span()[0] + offset
+                        match_end = match.span()[1] + offset
+
+                        # Save the winning key
+                        safe_pattern = re.sub(r'[^a-zA-Z0-9]', '_', match.group(0))
+                        keyfile = f"vanity_key-{safe_pattern}_{int(time.time())}"
+                        with open(keyfile, 'w') as f:
+                            f.write(privkey)
+                        with open(f"{keyfile}.pub", 'w') as f:
+                            f.write(pubkey)
 
                         self.result_queue.put({
                             'public': pubkey,
@@ -229,68 +242,7 @@ class VanityKeyBenchmark:
         while not self.found_key.is_set():
             self.stats.record_metrics()
             time.sleep(self.stats.sampling_interval)
-            
-    def run_benchmark(self):
-        """Run the benchmark with multiple processes"""
-        pattern = self._compile_pattern()
-        processes = []
-        
-        # Start metrics recording thread
-        metrics_thread = threading.Thread(target=self._metrics_recorder, daemon=True)
-        metrics_thread.start()
-        
-        # Start worker processes
-        for i in range(multiprocessing.cpu_count()):
-            p = multiprocessing.Process(
-                target=self._key_worker,
-                args=(i, pattern),
-                daemon=True
-            )
-            processes.append(p)
-            p.start()
-            
-        # Wait for a result
-        result = self.result_queue.get()
-        duration = time.time() - self.stats.start_time
-        
-        # Clean up processes
-        for p in processes:
-            p.terminate()
-            
-        # Calculate final statistics
-        benchmark_stats = self.stats.calculate_statistics(duration)
-        
-        # Add system information
-        system_info = {
-            'cpu_model': platform.processor(),
-            'cpu_count': multiprocessing.cpu_count(),
-            'physical_cores': psutil.cpu_count(logical=False),
-            'logical_cores': psutil.cpu_count(logical=True),
-            'memory_gb': psutil.virtual_memory().total / (1024**3),
-            'platform': platform.platform()
-        }
-        
-        # Combine all results
-        benchmark_results = {
-            'timestamp': datetime.now().isoformat(),
-            'system_info': system_info,
-            'benchmark_config': {
-                'pattern': self.pattern,
-                'anchor': self.anchor,
-                'case_sensitive': self.case_sensitive,
-                'key_type': self.key_type,
-                'key_bits': self.key_bits
-            },
-            'performance_metrics': benchmark_stats,
-            'winning_key': {
-                'worker_id': result['worker_id'],
-                'process_id': result['process_id'],
-                'match': result['match'],
-                'match_position': result['match_position']
-            }
-        }
-        
-        return result, benchmark_results
+    
     def run_benchmark(self):
         """Run the benchmark with multiple processes"""
         processes = []
