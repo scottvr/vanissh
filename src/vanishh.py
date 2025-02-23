@@ -97,7 +97,7 @@ class PatternSpec:
         # Validate pattern against key constraints
         self._validate_pattern()
 
-   def _validate_pattern(self):
+    def _validate_pattern(self):
         """Validate pattern against key type constraints"""
         if self.key_type == 'ed25519':
             max_length = KeyParser.get_matchable_length('ed25519')
