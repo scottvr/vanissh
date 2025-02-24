@@ -17,7 +17,7 @@ ssh-keygen -p -f newkey
 ```
 >And obviously, then you rename it from newkey and to newkey.pub a more meaningful name.
 
-I chuckled at this notion that brought forth vague impressions of BTC vanity addresses, intentional hash collisions and the like. My first fully-realized thought immediately upon reading it though was "oh no.. that should be automated in a loop. And those "memorable few digits" should be *specified beforehand* and then checked for, and when found the loop should exit, and rename your file for you."
+I chuckled at the notion of running the command over and over again until you get one that you like, but it brought forth vague impressions of BTC vanity addresses, intentional hash collisions and the like. My first fully-realized thought immediately upon reading it though was "oh no.. that should be automated in a loop. And those "memorable few digits" should be *specified beforehand* and then checked for, and when found the loop should exit, and rename your file for you."
 
 So naturally a tool started taking shape in my mind that would take a string, or perhaps a wordlist, and maybe even allow the user to specify where they would like to see the string... hmmm.
 
