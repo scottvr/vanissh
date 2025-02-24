@@ -71,7 +71,7 @@ You may wonder about the awkwardly-specific command-line arguments relating to t
 - "el8" either as the first or last three characters of the key's Base64-encoded string
 whichever comes first.*
 ```bash
-python ssh-key-mem-bench-v2.py -e you@example.com \
+python src/vanissh.py -e you@example.com \
     -ap "31337|leet|l33t|elite" \
     -ep "el8" \
     -sp "el8"
@@ -79,7 +79,7 @@ python ssh-key-mem-bench-v2.py -e you@example.com \
 
 ## Mix and match with position-specific case sensitivity (again, regex could handle this for you if you care to roll your own)
 ```bash
-python ssh-key-mem-bench-v2.py -e you@example.com \
+python src/vanissh.py -e you@example.com \
     -ap "l33t|elite" -ca \
     -ep "cool" \
     -sp "HACK" -cs
@@ -87,7 +87,7 @@ python ssh-key-mem-bench-v2.py -e you@example.com \
 
 ## Multiple patterns per position
 ```bash
-python ssh-key-mem-bench-v2.py -e you@example.com \
+python src/vanissh.py -e you@example.com \
     -ap "l33t" -ap "elite" \
     -ep "er" -ep "or" \
     -xp "ABCD"
