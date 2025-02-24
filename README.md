@@ -28,10 +28,12 @@ There were several _almost there_ iterations, allowing for a "prefix" or "suffix
 ```bash
 usage: vanissh.py [-h] --email EMAIL [--anywhere-pattern ANYWHERE_PATTERN]
                   [--start-pattern START_PATTERN] [--end-pattern END_PATTERN]
-                  [--exact-pattern EXACT_PATTERN] [--case-sensitive-anywhere]
-                  [--case-sensitive-start] [--case-sensitive-end]
-                  [--case-sensitive-exact] [--key-type {ed25519,rsa}]
-                  [--key-bits KEY_BITS] [--output OUTPUT]
+                  [--case-sensitive-anywhere] [--case-sensitive-start]
+                  [--case-sensitive-end]
+                  [--palindrome-length PALINDROME_LENGTH | --palindrome-start PALINDROME_START]
+                  [--use-free-i] [--key-type {ed25519,rsa}] [--key-bits KEY_BITS]
+                  [--output OUTPUT]
+
 ```
 # Options
 ```bash
@@ -45,22 +47,25 @@ optional arguments:
                         Pattern that must match at start of key
   --end-pattern END_PATTERN, -ep END_PATTERN
                         Pattern that must match at end of key
-  --exact-pattern EXACT_PATTERN, -xp EXACT_PATTERN
-                        Pattern that must match exactly (both start and end)
   --case-sensitive-anywhere, -ca
                         Make anywhere patterns case-sensitive
   --case-sensitive-start, -cs
                         Make start patterns case-sensitive
   --case-sensitive-end, -ce
                         Make end patterns case-sensitive
-  --case-sensitive-exact, -cx
-                        Make exact patterns case-sensitive
   --key-type {ed25519,rsa}, -t {ed25519,rsa}
                         Type of key to generate
   --key-bits KEY_BITS, -b KEY_BITS
                         Bits for RSA key (ignored for ed25519)
   --output OUTPUT, -o OUTPUT
-                        Output file for benchmark results (JSON)
+                        Output file for generation results (JSON)
+
+Palindrome options:
+  --palindrome-length PALINDROME_LENGTH
+                        Generate any palindrome of this total length
+  --palindrome-start PALINDROME_START
+                        Generate a palindrome starting with these characters
+  --use-free-i          Use the guaranteed "I" character as part of the palindrome
 ```
 # Examples
 
