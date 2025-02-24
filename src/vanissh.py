@@ -401,7 +401,7 @@ def generate_palindrome_pattern(length):
     second_half = ''.join(f'\\{i}' for i in range(half_length, 0, -1))
     
     # If odd length, add optional middle character
-    middle = '(.)?' if middle_char else ''
+    middle = '(.)' if middle_char else ''
     
     return first_half + middle + second_half
 
