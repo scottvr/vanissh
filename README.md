@@ -94,7 +94,7 @@ python ssh-key-mem-bench-v2.py -e you@example.com \
 ```
 and again, since it's all "OR" logic of terms at this point, the first example with the pipe-separated terms would be another way to accomplish the same.
 Also, with the power of regex you could do something like this:
-`-ap "\b(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*(?:(\w)[ \t,'"]*\11?[ \t,'"]*\10|\10?)[ \t,'"]*\9|\9?)[ \t,'"]*\8|\8?)[ \t,'"]*\7|\7?)[ \t,'"]*\6|\6?)[ \t,'"]*\5|\5?)[ \t,'"]*\4|\4?)[ \t,'"]*\3|\3?)[ \t,'"]*\2|\2?))?[ \t,'"]*\1\b"` 
+`-ap "(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)\11?\10|\10?)\9|\9?)\8|\8?)\7|\7?)\6|\6?)\5|\5?)\4|\4?)\3|\3?)\2|\2?))?\1"` 
 and be assured that at some point, some day, given enough time, you'd have an ssh public key that was a palindrome!
 
 *there is a bit of post-match checking for  magic that occurs in the unlikely event that you specified a pattern in such a way where say a five-letter pattern is specified as well as a three-letter pattern that is found within that longer pattern. If it is about to declare a winning three-letter pattern, it will check just in case you get lucky and alert you if surrounding characters mean you also matched the five-letter pattern. I'm working on allowing the known characters of the pre-amble (I'll talk about this in a later section) to be checked in the event you have a `start` or `anywhere` pattern where the "AI" at the start of the Base64-encoded 32-byte key of your new ed25519 key.
