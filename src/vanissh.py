@@ -448,7 +448,7 @@ def collect_patterns(args):
             patterns.append(PatternSpec(p, 'end', args.case_sensitive_end))
     
     # Handle palindrome patterns
-        if args.palindrome_length:
+    if args.palindrome_length:
         if args.use_free_i:
             length = args.palindrome_length - 2
             if length < 1:
@@ -459,7 +459,7 @@ def collect_patterns(args):
             pattern = generate_palindrome_pattern(args.palindrome_length)
             print(f"Generated palindrome pattern: {pattern}")  # Debug
         patterns.append(PatternSpec(pattern, 'anywhere', False))
-                
+
     elif args.palindrome_start:
         start_chars = args.palindrome_start
         if args.use_free_i and not start_chars.startswith('I'):
