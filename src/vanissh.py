@@ -103,10 +103,7 @@ class PatternSpec:
         self.case_sensitive = case_sensitive
         self.key_type = key_type
         self._compiled = None
-
-        # Validate pattern against key constraints
-        self._validate_pattern()
-
+    
     def _validate_pattern(self):
         """Validate pattern against key type constraints"""
         if self.key_type == 'ed25519':
@@ -135,17 +132,18 @@ class PatternSpec:
 
     def compile(self):
         """Compile the pattern with appropriate anchors"""
-        # Handle each pattern in the alternation separately
-        patterns = self.pattern.split('|')
+        pattern = self.pattern
         
+        # Add anchors if needed
         if self.anchor == 'start':
-            patterns = ['^' + p for p in patterns]
+            pattern = '^' + pattern
         elif self.anchor == 'end':
-            patterns = [p + '$' for p in patterns]
-        elif self.anchor == 'both':
-            patterns = ['^' + p + '$' for p in patterns]
+            pattern = pattern + '$'
             
-        pattern = '|'.join(f'({p})' for p in patterns)
+        # Only group if we're not starting with a group
+        if not pattern.startswith('('):
+            pattern = f'({pattern})'
+            
         flags = 0 if self.case_sensitive else re.IGNORECASE
         self._compiled = re.compile(pattern, flags)
         return self._compiled
