@@ -173,7 +173,7 @@ That didn't take long at all. It was quite surprising to me.
 
 Of course, the more characters in your pattern and the more constraints you specify (position, case-sensitivity) the longer the average time for you to generate a winning vanity key will be.
 
-But, that's an average, over time, given enough generations.. I'm not a statistician and *I* know why; perhaps you will all soon know why as well as I try to explain some things. 
+But, that's an average, over time, given enough generations.. I'm not a statistician and *I* know why*; perhaps you will all soon know why as well as I try to explain some things. (*know why I am not a statistician, that is.) 
 
 
 ## Some Thoughts and Learnings along the way.
