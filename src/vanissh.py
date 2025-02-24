@@ -54,7 +54,7 @@ class KeyParser:
         base64_part = base64_part.rstrip('=')
 
         # Find where the actual key material starts
-        offset = get_header_length(key_type)
+        offset = KeyParser.get_header_length(key_type)
 
         if key_type == 'ed25519':
             if not base64_part.startswith(KeyParser.ED25519_HEADER):
