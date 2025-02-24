@@ -26,13 +26,13 @@ There were several _almost there_ iterations, allowing for a "prefix" or "suffix
 # Usage
 
 ```bash
-usage: vanishh.py [-h] --email EMAIL [--anywhere-pattern ANYWHERE_PATTERN]
+usage: vanissh.py [-h] --email EMAIL [--anywhere-pattern ANYWHERE_PATTERN]
                   [--start-pattern START_PATTERN] [--end-pattern END_PATTERN]
                   [--exact-pattern EXACT_PATTERN] [--case-sensitive-anywhere]
                   [--case-sensitive-start] [--case-sensitive-end]
                   [--case-sensitive-exact] [--key-type {ed25519,rsa}]
                   [--key-bits KEY_BITS] [--output OUTPUT]
-vanishh.py: error: the following arguments are required: --email/-e
+vanissh.py: error: the following arguments are required: --email/-e
 ```
 # Options
 ```bash
