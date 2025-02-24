@@ -22,13 +22,15 @@ class KeyParser:
         17: 'AAAABEQ',
         257: 'AAAACAQE',
         65537: 'AAAADAQAB'
+        # etc?
     }
     
     # Known RSA modulus length indicators
     RSA_MODULUS_PREFIXES = {
         1024: 'AAAAg',
         2048: 'AAABAQ',
-        4096: 'AAACAQ'  # Add more as needed
+        4096: 'AAACAQ'  
+        # etc?
     }
 
     @staticmethod
