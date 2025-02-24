@@ -14,7 +14,7 @@ import platform
 import os
 
 class KeyParser:
-    ED25519_HEADER = 'AAAAC3NzaC1lZDI1NTE5AAAA'
+    ED25519_HEADER = 'AAAAC3NzaC1lZDI1NTE5AAAA' # what's with the 'I' that is always there after the AAAA key preamble?
     RSA_HEADER = 'AAAAB3NzaC1yc2E'
     # Known RSA exponent patterns
     RSA_EXPONENTS = {
@@ -35,7 +35,10 @@ class KeyParser:
     def get_header_length(key_type):
         """Return the length of the header for the given key type"""
         if key_type == 'ed25519':
-            return len(KeyParser.ED25519_HEADER)
+            return (len(KeyParser.ED25519_HEADER) + 1) # plus one to account for the 'I' mentioned when we define the header. 
+                                                       # I haven't found an explanation for the 'I' so I'm not comfortable assuming 
+                                                       # it will always be 'I', but I am pretty certain there is always a letter there 
+                                                       # that we have no chance of including in our character space for our vanity string
         elif key_type == 'rsa':
             return len(KeyParser.RSA_HEADER)
         return None
@@ -50,21 +53,20 @@ class KeyParser:
         base64_part = parts[1]
         base64_part = base64_part.rstrip('=')
 
+        # Find where the actual key material starts
+        offset = get_header_length(key_type)
+
         if key_type == 'ed25519':
             if not base64_part.startswith(KeyParser.ED25519_HEADER):
                 return None, None
             # For ed25519, everything after header is fair game
             return (
-                base64_part[len(KeyParser.ED25519_HEADER):],
-                len(KeyParser.ED25519_HEADER)
+                base64_part[offset:], offset
             )
 
         elif key_type == 'rsa':
             if not base64_part.startswith(KeyParser.RSA_HEADER):
                 return None, None
-
-            # Find where the actual key material starts
-            offset = len(KeyParser.RSA_HEADER)
 
             # Try to identify the exponent portion
             for exp_encoding in KeyParser.RSA_EXPONENTS.values():
