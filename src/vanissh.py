@@ -448,18 +448,18 @@ def collect_patterns(args):
             patterns.append(PatternSpec(p, 'end', args.case_sensitive_end))
     
     # Handle palindrome patterns
-    if args.palindrome_length:
+        if args.palindrome_length:
         if args.use_free_i:
-            # Must use 'I' at start
-            length = args.palindrome_length - 2  # Account for I's at start and end
+            length = args.palindrome_length - 2
             if length < 1:
                 raise ValueError("Palindrome length must be at least 3 when using guaranteed I")
             pattern = 'I' + generate_palindrome_pattern(length) + 'I'
-            patterns.append(PatternSpec(pattern, 'anywhere', False))
+            print(f"Generated palindrome pattern (with I): {pattern}")  # Debug
         else:
             pattern = generate_palindrome_pattern(args.palindrome_length)
-            patterns.append(PatternSpec(pattern, 'anywhere', False))
-            
+            print(f"Generated palindrome pattern: {pattern}")  # Debug
+        patterns.append(PatternSpec(pattern, 'anywhere', False))
+                
     elif args.palindrome_start:
         start_chars = args.palindrome_start
         if args.use_free_i and not start_chars.startswith('I'):
