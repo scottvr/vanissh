@@ -95,6 +95,47 @@ python src/vanissh.py -e you@example.com \
 and again, since it's all "OR" logic of terms at this point, the first example with the pipe-separated terms would be another way to accomplish the same.
 Also, with the power of regex you could do something like this:
 `-ap "(.)(.)(.).?\3\2\1"` and be assured that, given enough time, you'd have an ssh public key that contained a palindrome! (continue that up to \22 (so you'll have a total of 44 characters after the Base64-encoded ssh-ed25519 prefix) and your entire public key is a palindrome! Maybe that's something to tackle in the "stuff I learned" section when we talk about probabilities.
+## EDIT
+Where there was just the above silly-but-true comment about palindromes, there is now a built-in palindromic keyfinder. 
+Just playin' around on an old i5 laptop:
+```bash
+(.venv) C:\Users\scottvr\source\vanissh>python src\vanissh.py  -e ia.mamai@iamam.ai --palindrome-length 7
+Generated palindrome pattern: (.)(.)(.)(.)\3\2\1
+Starting generation with 4 processes...
+
+Generation Results:
+Found matching key in 13.66 seconds
+Total attempts: 513
+Keys per second: 37.56
+Keys per second per worker: 9.39
+
+CPU Frequency (MHz):
+  Min: 2400
+  Max: 2400
+  Avg: 2400
+
+Matching Key:
+Public key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICZKa/n6RbGXwMwXGdNiUUiB2gc8t1SC
+nCBHf1YTgoBa meem@ten.net
+Matched pattern 'GXwMwXG' at position (34, 41)
+Found by worker 2 (PID: 9780)
+```
+lulz. It doesn't look like much hiding in the key but you gotta admit that 
+### GXwMwXG
+looks pretty cool on its own.
+
+The new options are, btw:
+```
+Palindrome options:
+  --palindrome-length PALINDROME_LENGTH
+                        Generate any palindrome of this total length
+  --palindrome-start PALINDROME_START
+                        Generate a palindrome starting with these characters
+  --use-free-i          Use the guaranteed "I" character as part of the
+                        palindrome
+```
+ok.. back to what you were reading before...
+----
 
 *there is a bit of post-match checking for  magic that occurs in the unlikely event that you specified a pattern in such a way where say a five-letter pattern is specified as well as a three-letter pattern that is found within that longer pattern. If it is about to declare a winning three-letter pattern, it will check just in case you get lucky and alert you if surrounding characters mean you also matched the five-letter pattern. I'm working on allowing the known characters of the pre-amble (I'll talk about this in a later section) to be checked in the event you have a `start` or `anywhere` pattern where the "AI" at the start of the Base64-encoded 32-byte key of your new ed25519 key.
 
