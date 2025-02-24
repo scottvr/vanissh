@@ -5,7 +5,7 @@ I was importing some public keys into an authorized_keys file manually for a sma
 
 A quick search lead me to [Brandon Checketts' blog](https://www.brandonchecketts.com/archives/ssh-ed25519-key-best-practices-for-2025) page on the topic (in which he pokes a little fun about his *older* version of a similar article ranking highly with the search engines, making him apparently feel somewhat obligated to write an updated version of an "SSH Key Best Practices" post.) It's a good read and touches on things like "department keys", key rotation, and some other good stuff; check it out.
 
-But the reason I mention his blog post is near the bottom he writes:
+But the reason I am mentioning his blog post is that near the bottom of his article he writes:
 >Obsessive/Compulsive Tip
 This may be taking it too far, but I like to have a memorable few digits at the end of the key so that I can confirm the key got copied correctly. One of my keys ends in 7srus, so I think of it as my “7’s ‘R’ Us” key. You can do that over and over again until you find a key that you like with this one-liner:
 ```bash
