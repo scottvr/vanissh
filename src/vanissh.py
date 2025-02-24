@@ -103,10 +103,7 @@ class PatternSpec:
         self.case_sensitive = case_sensitive
         self.key_type = key_type
         self._compiled = None
-
-        # Validate pattern against key constraints
-        self._validate_pattern()
-
+    
     def _validate_pattern(self):
         """Validate pattern against key type constraints"""
         if self.key_type == 'ed25519':
@@ -135,17 +132,18 @@ class PatternSpec:
 
     def compile(self):
         """Compile the pattern with appropriate anchors"""
-        # Handle each pattern in the alternation separately
-        patterns = self.pattern.split('|')
+        pattern = self.pattern
         
+        # Add anchors if needed
         if self.anchor == 'start':
-            patterns = ['^' + p for p in patterns]
+            pattern = '^' + pattern
         elif self.anchor == 'end':
-            patterns = [p + '$' for p in patterns]
-        elif self.anchor == 'both':
-            patterns = ['^' + p + '$' for p in patterns]
+            pattern = pattern + '$'
             
-        pattern = '|'.join(f'({p})' for p in patterns)
+        # Only group if we're not starting with a group
+        if not pattern.startswith('('):
+            pattern = f'({pattern})'
+            
         flags = 0 if self.case_sensitive else re.IGNORECASE
         self._compiled = re.compile(pattern, flags)
         return self._compiled
@@ -385,6 +383,96 @@ class GenerationStats:
             'cpu_temperature_c': temp_stats
         }
         return result, generation_results
+def generate_palindrome_pattern(length):
+    """
+    Generate a regex pattern that matches palindromes of specified length.
+    Length must be at least 2.
+    """
+    if length < 2:
+        raise ValueError("Length must be at least 2")
+        
+    half_length = length // 2
+    middle_char = length % 2  # 1 if odd length, 0 if even
+    
+    # Build the first half with capture groups
+    first_half = ''.join(f'(.)' for _ in range(half_length))
+    
+    # Build the second half with backreferences in reverse
+    second_half = ''.join(f'\\{i}' for i in range(half_length, 0, -1))
+    
+    # If odd length, add optional middle character
+    middle = '(.)' if middle_char else ''
+    
+    return first_half + middle + second_half
+
+def add_palindrome_arguments(parser):
+    """Add palindrome-related arguments to the argument parser"""
+    palindrome_group = parser.add_argument_group('Palindrome options')
+    
+    # Main palindrome options - mutually exclusive
+    pal_type = palindrome_group.add_mutually_exclusive_group()
+    pal_type.add_argument(
+        '--palindrome-length',
+        type=int,
+        help='Generate any palindrome of this total length'
+    )
+    pal_type.add_argument(
+        '--palindrome-start',
+        help='Generate a palindrome starting with these characters'
+    )
+    
+    # Additional palindrome options
+    palindrome_group.add_argument(
+        '--use-free-i',
+        action='store_true',
+        help='Use the guaranteed "I" character as part of the palindrome'
+    )
+
+def collect_patterns(args):
+    """Collect all patterns from arguments including palindromes"""
+    patterns = []
+    
+    # Handle regular patterns
+    if args.anywhere_pattern:
+        for p in args.anywhere_pattern:
+            patterns.append(PatternSpec(p, 'anywhere', args.case_sensitive_anywhere))
+            
+    if args.start_pattern:
+        for p in args.start_pattern:
+            patterns.append(PatternSpec(p, 'start', args.case_sensitive_start))
+            
+    if args.end_pattern:
+        for p in args.end_pattern:
+            patterns.append(PatternSpec(p, 'end', args.case_sensitive_end))
+    
+    # Handle palindrome patterns
+    if args.palindrome_length:
+        if args.use_free_i:
+            length = args.palindrome_length - 2
+            if length < 1:
+                raise ValueError("Palindrome length must be at least 3 when using guaranteed I")
+            pattern = 'I' + generate_palindrome_pattern(length) + 'I'
+            print(f"Generated palindrome pattern (with I): {pattern}")  # Debug
+        else:
+            pattern = generate_palindrome_pattern(args.palindrome_length)
+            print(f"Generated palindrome pattern: {pattern}")  # Debug
+        patterns.append(PatternSpec(pattern, 'anywhere', False))
+
+    elif args.palindrome_start:
+        start_chars = args.palindrome_start
+        if args.use_free_i and not start_chars.startswith('I'):
+            start_chars = 'I' + start_chars
+            
+        # Generate captures for the start characters
+        pattern = ''.join(f'({c})' for c in start_chars)
+        # Add backreferences in reverse
+        pattern += ''.join(f'\\{i}' for i in range(len(start_chars), 0, -1))
+        patterns.append(PatternSpec(pattern, 'anywhere', False))
+    
+    if not patterns:
+        raise ValueError("At least one pattern or palindrome must be specified")
+        
+    return patterns
 
 def main():
     parser = argparse.ArgumentParser(
@@ -412,11 +500,6 @@ def main():
         action='append',
         help='Pattern that must match at end of key'
     )
-    parser.add_argument(
-        '--exact-pattern', '-xp',
-        action='append',
-        help='Pattern that must match exactly (both start and end)'
-    )
     
     # Case sensitivity can be specified per pattern group
     parser.add_argument(
@@ -434,12 +517,9 @@ def main():
         action='store_true',
         help='Make end patterns case-sensitive'
     )
-    parser.add_argument(
-        '--case-sensitive-exact', '-cx',
-        action='store_true',
-        help='Make exact patterns case-sensitive'
-    )
-    
+   # Add palindrome arguments
+    add_palindrome_arguments(parser)
+        
     parser.add_argument(
         '--key-type', '-t',
         choices=['ed25519', 'rsa'],
@@ -459,28 +539,12 @@ def main():
     
     args = parser.parse_args()
     
-    # Collect all patterns
-    patterns = []
-    
-    if args.anywhere_pattern:
-        for p in args.anywhere_pattern:
-            patterns.append(PatternSpec(p, 'anywhere', args.case_sensitive_anywhere))
-            
-    if args.start_pattern:
-        for p in args.start_pattern:
-            patterns.append(PatternSpec(p, 'start', args.case_sensitive_start))
-            
-    if args.end_pattern:
-        for p in args.end_pattern:
-            patterns.append(PatternSpec(p, 'end', args.case_sensitive_end))
-            
-    if args.exact_pattern:
-        for p in args.exact_pattern:
-            patterns.append(PatternSpec(p, 'both', args.case_sensitive_exact))
-    
-    if not patterns:
-        parser.error("At least one pattern must be specified")
-    
+    # Collect all patterns including palindromes
+    try:
+        patterns = collect_patterns(args)
+    except ValueError as e:
+        parser.error(str(e))
+       
     generation = VanityKeyGeneration(
         args.email,
         patterns,
