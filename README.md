@@ -94,8 +94,7 @@ python ssh-key-mem-bench-v2.py -e you@example.com \
 ```
 and again, since it's all "OR" logic of terms at this point, the first example with the pipe-separated terms would be another way to accomplish the same.
 Also, with the power of regex you could do something like this:
-`-ap "(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)(?:(.)\11?\10|\10?)\9|\9?)\8|\8?)\7|\7?)\6|\6?)\5|\5?)\4|\4?)\3|\3?)\2|\2?))?\1"` 
-and be assured that at some point, some day, given enough time, you'd have an ssh public key that was a palindrome!
+`-ap "(.)(.)(.).?\3\2\1"` and be assured that, given enough time, you'd have an ssh public key that contained a palindrome! (continue that up to \22 (so you'll have a total of 44 characters after the Base64-encoded ssh-ed25519 prefix) and your entire public key is a palindrome! Maybe that's something to tackle in the "stuff I learned" section when we talk about probabilities.
 
 *there is a bit of post-match checking for  magic that occurs in the unlikely event that you specified a pattern in such a way where say a five-letter pattern is specified as well as a three-letter pattern that is found within that longer pattern. If it is about to declare a winning three-letter pattern, it will check just in case you get lucky and alert you if surrounding characters mean you also matched the five-letter pattern. I'm working on allowing the known characters of the pre-amble (I'll talk about this in a later section) to be checked in the event you have a `start` or `anywhere` pattern where the "AI" at the start of the Base64-encoded 32-byte key of your new ed25519 key.
 
