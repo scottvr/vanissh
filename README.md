@@ -32,7 +32,6 @@ usage: vanissh.py [-h] --email EMAIL [--anywhere-pattern ANYWHERE_PATTERN]
                   [--case-sensitive-start] [--case-sensitive-end]
                   [--case-sensitive-exact] [--key-type {ed25519,rsa}]
                   [--key-bits KEY_BITS] [--output OUTPUT]
-vanissh.py: error: the following arguments are required: --email/-e
 ```
 # Options
 ```bash
