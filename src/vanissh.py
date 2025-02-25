@@ -179,7 +179,6 @@ def generate_palindrome_pattern(length):
         
     return pattern
 
-
 class CryptoKeyGenerator:
     """Generate keys using the cryptography library"""
     
@@ -1034,5 +1033,5 @@ if __name__ == '__main__':
     import time
     import statistics
     positions = list(range(40, 60))  # for example, testing positions 40 through 59
-    test_vanity = "VANITY"
+    test_vanity = "AB"
     results = test_injection_position(test_vanity, positions, iterations=20)
