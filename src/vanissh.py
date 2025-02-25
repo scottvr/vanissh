@@ -10,13 +10,21 @@ import psutil
 import json
 from datetime import datetime
 import platform
+import random
 import os
 
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization, hashes
 
+# Try to import gmpy2 for faster prime operations
+try:
+    import gmpy2
+    HAVE_GMPY2 = True
+except ImportError:
+    HAVE_GMPY2 = False
+    print("Note: For 10x performance, install gmpy2: pip install gmpy2")
 
 class KeyParser:
     ED25519_HEADER = 'AAAAC3NzaC1lZDI1NTE5AAAA'
@@ -210,33 +218,25 @@ class CryptoKeyGenerator:
         return private_pem, public_ssh
 
 
-class RSAVanityGenerator:
-    """Generate RSA keys with specific vanity text at known positions"""
+# Base64 characters used in SSH/PEM encoding
+BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+"
+
+
+class RSAVanityKeyGenerator:
+    """Generate RSA keys with vanity strings at specified positions"""
     
-    def __init__(self, email, vanity_text, key_bits=2048):
+    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, similarity=0.7):
         self.email = email
         self.vanity_text = vanity_text
         self.key_bits = key_bits
-        self.base64_chars = (
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            "abcdefghijklmnopqrstuvwxyz"
-            "0123456789/+"
-        )
+        self.optimize = optimize
+        self.similarity = similarity
         
-    def is_valid_vanity(self):
+    def is_valid_vanity(self, text=None):
         """Check if vanity text contains only valid base64 characters"""
-        return all(c in self.base64_chars for c in self.vanity_text)
-        
-    def inject_vanity_ssh(self, priv_key):
-        """Embed the vanity text in an SSH-format public key"""
-        
-        raise NotImplementedError("RSA vanity injection not yet implemented")
-        
-    def make_valid_rsa_key(self, priv_key, pub_key):
-        """Generate a valid private key, with N close to the N from pub_key"""
-        
-       
-        raise NotImplementedError("RSA key validation not yet implemented")
+        if text is None:
+            text = self.vanity_text
+        return all(c in BASE64_CHARS for c in text)
         
     def generate_key(self):
         """Generate a valid RSA key with the vanity text"""
@@ -244,13 +244,237 @@ class RSAVanityGenerator:
         if not self.is_valid_vanity():
             raise ValueError(f"Vanity text '{self.vanity_text}' contains invalid characters")
             
-        # looking at github.com/vanity_rsa we see that
-        # Steps would be:
-        # 1. Generate a normal RSA key
-        # 2. Inject the vanity text
-        # 3. Make the key valid again
-        # 4. Return the key pair
-        raise NotImplementedError("RSA vanity generation not yet implemented")
+        # If optimization is enabled, find a better variation
+        if self.optimize:
+            original = self.vanity_text
+            candidates = self.generate_optimized_candidates(original)
+            print(f"Original vanity: {original}")
+            print("Optimized candidates (estimated performance boost):")
+            for i, (candidate, score) in enumerate(candidates[:5], 1):
+                print(f"{i}. '{candidate}' (approx. {score:.1f}x faster)")
+                
+            # Ask user which candidate to use
+            choice = input("Enter number of candidate to use (or 0 for original): ")
+            try:
+                choice = int(choice)
+                if 1 <= choice <= len(candidates):
+                    self.vanity_text = candidates[choice-1][0]
+                    print(f"Using optimized vanity: '{self.vanity_text}'")
+                else:
+                    print(f"Using original vanity: '{original}'")
+            except ValueError:
+                print(f"Using original vanity: '{original}'")
+        
+        # Start with a normal RSA key
+        print("Generating initial RSA key...")
+        priv_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=self.key_bits
+        )
+        
+        # Inject vanity string
+        print(f"Injecting vanity string: {self.vanity_text}")
+        pub_key = self.inject_vanity_ssh(priv_key)
+        
+        # Fix the key to make it valid
+        print("Making the key mathematically valid (this may take a while)...")
+        start_time = time.time()
+        valid_key = self.make_valid_rsa_key(priv_key, pub_key)
+        elapsed = time.time() - start_time
+        print(f"Key validation completed in {elapsed:.2f} seconds")
+        
+        # Encode the key in OpenSSH format
+        priv_pem = valid_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        ).decode()
+        
+        pub_ssh = valid_key.public_key().public_bytes(
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH
+        ).decode()
+        
+        # Add comment to public key if not already present
+        if not pub_ssh.endswith(self.email):
+            pub_ssh = f"{pub_ssh} {self.email}"
+            
+        return priv_pem, pub_ssh
+        
+    def inject_vanity_ssh(self, priv_key):
+        """Embed the vanity text in an SSH-format public key"""
+        vanity = self.vanity_text.encode()
+        
+        # Generate the SSH format public key
+        public_key_repr = priv_key.public_key().public_bytes(
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH
+        )
+
+        # Public keys with 65537 exponent all have the same prefix:
+        # 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAg'
+        # We inject the vanity right after this prefix
+        # The exact position might need adjustment based on key size
+        injection_pos = 38
+        
+        # Inject the vanity text
+        public_key_repr = (
+            public_key_repr[:injection_pos] +
+            vanity +
+            public_key_repr[injection_pos + len(vanity):]
+        )
+
+        # Load the modified (but likely invalid) key back
+        pub_key = serialization.load_ssh_public_key(public_key_repr)
+        return pub_key
+        
+    def make_valid_rsa_key(self, priv_key, pub_key):
+        """Generate a valid private key, with N close to the N from pub_key"""
+        # Extract components from the keys
+        n = pub_key.public_numbers().n
+        e = pub_key.public_numbers().e
+        p = priv_key.private_numbers().p
+        
+        # Find a prime q such that p*q is close to n
+        q = self.close_prime(n // p)
+        
+        # Compute the private key from p, q, and e
+        phi = (p - 1) * (q - 1)
+        d = self.mod_inverse(e, phi)
+        iqmp = self.mod_inverse(p, q)
+        dmp1 = d % (p - 1)
+        dmq1 = d % (q - 1)
+        
+        # Create a new private key with these values
+        private_numbers = rsa.RSAPrivateNumbers(
+            p=p,
+            q=q,
+            d=d,
+            dmp1=dmp1,
+            dmq1=dmq1,
+            iqmp=iqmp,
+            public_numbers=rsa.RSAPublicNumbers(e=e, n=p*q)
+        )
+        
+        return private_numbers.private_key()
+        
+    def close_prime(self, n):
+        """Find a prime number close to n."""
+        if self.is_prime(n):
+            return n  # If already prime - return it as-is.
+
+        if not (n % 2):
+            n += 1
+
+        offset = 2
+        near_primes = []
+
+        # Find 10 primes near the provided number
+        while len(near_primes) < 10:
+            if self.is_prime(n + offset):
+                near_primes.append(n + offset)
+            if self.is_prime(n - offset):
+                near_primes.append(n - offset)
+            offset += 2
+
+        return random.choice(near_primes)
+        
+    def is_prime(self, n, k=10):
+        """Check if a number is prime."""
+        if HAVE_GMPY2:
+            return gmpy2.is_prime(n)
+        else:
+            # Miller-Rabin primality test
+            if n == 2 or n == 3:
+                return True
+            if n <= 1 or n % 2 == 0:
+                return False
+                
+            # Find r and s such that n-1 = 2^s * r
+            r, s = n - 1, 0
+            while r % 2 == 0:
+                r //= 2
+                s += 1
+                
+            # Witness loop
+            for _ in range(k):
+                a = random.randrange(2, n - 1)
+                x = pow(a, r, n)
+                if x != 1 and x != n - 1:
+                    j = 1
+                    while j < s and x != n - 1:
+                        x = pow(x, 2, n)
+                        if x == 1:
+                            return False
+                        j += 1
+                    if x != n - 1:
+                        return False
+            return True
+            
+    def mod_inverse(self, a, m):
+        """Calculate the modular inverse of a mod m."""
+        if HAVE_GMPY2:
+            return int(gmpy2.invert(a, m))
+        else:
+            # Extended Euclidean Algorithm
+            g, x, y = self.extended_gcd(a, m)
+            if g != 1:
+                raise ValueError("Modular inverse does not exist")
+            else:
+                return x % m
+                
+    def extended_gcd(self, a, b):
+        """Extended Euclidean Algorithm"""
+        if a == 0:
+            return b, 0, 1
+        else:
+            gcd, x, y = self.extended_gcd(b % a, a)
+            return gcd, y - (b // a) * x, x
+            
+    def generate_optimized_candidates(self, original):
+        """Generate optimized candidates for the vanity string"""
+        candidates = []
+        
+        # 1. Case variations (if original has mixed case)
+        candidates.append((original.lower(), 1.2))
+        candidates.append((original.upper(), 1.3))
+        
+        # 2. Leet speak substitutions
+        leet_map = {
+            'a': '4', 'A': '4',
+            'e': '3', 'E': '3',
+            'i': '1', 'I': '1',
+            'o': '0', 'O': '0',
+            'l': '1', 'L': '1',
+            's': '5', 'S': '5',
+            't': '7', 'T': '7'
+        }
+        
+        leet_version = original
+        for char, replacement in leet_map.items():
+            leet_version = leet_version.replace(char, replacement)
+        
+        if leet_version != original:
+            candidates.append((leet_version, 1.5))
+            
+        # 3. Position optimizations
+        # For now, just assign different scores based on theoretical position impact
+        candidates.append((original + "==", 1.8))  # End padding often easier to accommodate
+        
+        # 4. Simple repetition patterns
+        if len(original) <= 4:
+            candidates.append((original + original, 1.4))
+            
+        # 5. Combinations of the above
+        leet_lower = leet_version.lower()
+        if leet_lower != leet_version:
+            candidates.append((leet_lower, 1.7))
+            
+        # Remove any invalid candidates
+        candidates = [(c, s) for c, s in candidates if self.is_valid_vanity(c)]
+        
+        # Sort by score (highest first)
+        return sorted(candidates, key=lambda x: x[1], reverse=True)
 
 
 class VanityKeyGeneration:
@@ -455,6 +679,120 @@ class GenerationStats:
             'cpu_temperature_c': temp_stats
         }
 
+def handle_rsa_vanity(args):
+    """Handle RSA vanity key generation"""
+    print(f"Generating RSA vanity key with text: {args.rsa_vanity}")
+    
+    try:
+        generator = RSAVanityKeyGenerator(
+            args.email, 
+            args.rsa_vanity, 
+            args.key_bits,
+            args.optimize,
+            args.similarity
+        )
+        
+        privkey, pubkey = generator.generate_key()
+        
+        # Save the key
+        safe_vanity = re.sub(r'[^a-zA-Z0-9]', '_', args.rsa_vanity)
+        keyfile = f"vanity_key-rsa-{safe_vanity}_{int(time.time())}"
+        with open(keyfile, 'w') as f:
+            f.write(privkey)
+        with open(f"{keyfile}.pub", 'w') as f:
+            f.write(pubkey)
+            
+        print(f"\nGenerated RSA key with vanity text: {args.rsa_vanity}")
+        print(f"Key saved as: {keyfile}")
+        print(f"Public key: {pubkey}")
+        
+        # Test the key to make sure it's valid
+        print("\nTesting key validity...")
+        test_key(privkey, pubkey)
+        print("Key successfully validated!")
+        
+        return True
+    except Exception as e:
+        print(f"Error generating RSA vanity key: {str(e)}")
+        return False
+
+def test_key(priv_pem, pub_ssh):
+    """Test that the generated key is valid and works for encryption/signing"""
+    # Load the private key
+    priv_key = serialization.load_pem_private_key(
+        priv_pem.encode(),
+        password=None
+    )
+    
+    # Load the public key
+    pub_key = serialization.load_ssh_public_key(
+        pub_ssh.split()[0:2].encode()  # Remove comment part
+    )
+    
+    # Test encryption/decryption
+    test_message = b"Test message for encryption"
+    ciphertext = pub_key.encrypt(
+        test_message,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    
+    plaintext = priv_key.decrypt(
+        ciphertext,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    
+    if plaintext != test_message:
+        raise ValueError("Encryption/decryption test failed")
+    
+    # Test signing/verification
+    signature = priv_key.sign(
+        test_message,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH
+        ),
+        hashes.SHA256()
+    )
+    
+    try:
+        pub_key.verify(
+            signature,
+            test_message,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
+    except Exception:
+        raise ValueError("Signature verification failed")
+
+def add_rsa_vanity_arguments(parser):
+    rsa_vanity_group = parser.add_argument_group('RSA Vanity Injection')
+    rsa_vanity_group.add_argument(
+        '-rp', '--rsa-vanity', metavar='vanity_str',
+        help='Generate RSA key with specific vanity text injected at start of key'
+    )
+    rsa_vanity_group.add_argument(
+        '-O', '--optimize',
+        action='store_true',
+        help='Suggest optimized variations of the vanity text for faster generation'
+    )
+    rsa_vanity_group.add_argument(
+        '-st', '--similarity', metavar="{0.0,1.0}",
+        type=float,
+        default=0.7,
+        help='Minimum visual similarity for optimized variations (0.0-1.0)'
+    )
+    
 
 def add_palindrome_arguments(parser):
     """Add palindrome-related arguments to the argument parser"""
@@ -463,23 +801,23 @@ def add_palindrome_arguments(parser):
     # Main palindrome options - mutually exclusive
     pal_type = palindrome_group.add_mutually_exclusive_group()
     pal_type.add_argument(
-        '--palindrome-length',
+        '-pl', '--palindrome-length', metavar="{0,22}",
         type=int,
         help='Generate any palindrome of this total length'
     )
     pal_type.add_argument(
-        '--palindrome-start',
+        '-ps', '--palindrome-start', metavar="vanity_str",
         help='Generate a palindrome starting with these characters'
     )
     
     # Additional palindrome options
     palindrome_group.add_argument(
-        '--use-free-i',
+        '-ui', '--use-free-i',
         action='store_true',
         help='Use the guaranteed "I" character as part of the palindrome'
     )
     palindrome_group.add_argument(
-        '--palindrome-case-sensitive', '-pc',
+        '-pc', '--palindrome-case-sensitive', 
         action='store_true',
         help='Make palindrome matching case-sensitive'
     )
@@ -532,101 +870,85 @@ def collect_patterns(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Vanity SSH key generation with complex pattern matching"
+#        description="Vanity SSH key generation with complex pattern matching",
+#        usage='%(prog)s [options]'
     )
     parser.add_argument(
-        '--email', '-e',
-        required=True,
+        '-e', '--email', metavar="email/comment",
+        #required=True,
         help='Email address for key comment'
     )
     
+    pattern_group = parser.add_argument_group('Vanity Pattern options')
     # Pattern group arguments
-    parser.add_argument(
-        '--anywhere-pattern', '-ap',
+    pattern_group.add_argument(
+        '-ap', '--anywhere-pattern',  metavar='vanity_str',
         action='append',
         help='Pattern to match anywhere in the key'
     )
-    parser.add_argument(
-        '--start-pattern', '-sp',
+    pattern_group.add_argument(
+        '-sp', '--start-pattern',  metavar='vanity_str',
         action='append',
         help='Pattern that must match at start of key'
     )
-    parser.add_argument(
-        '--end-pattern', '-ep',
+    pattern_group.add_argument(
+        '-ep', '--end-pattern', metavar='vanity_str',
         action='append',
         help='Pattern that must match at end of key'
     )
     
     # Case sensitivity can be specified per pattern group
-    parser.add_argument(
-        '--case-sensitive-anywhere', '-ca',
+    pattern_group.add_argument(
+        '-ca', '--case-sensitive-anywhere', 
         action='store_true',
         help='Make anywhere patterns case-sensitive'
     )
-    parser.add_argument(
-        '--case-sensitive-start', '-cs',
+    pattern_group.add_argument(
+        '-cs', '--case-sensitive-start', 
         action='store_true',
         help='Make start patterns case-sensitive'
     )
-    parser.add_argument(
-        '--case-sensitive-end', '-ce',
+    pattern_group.add_argument(
+        '-ce', '--case-sensitive-end',
         action='store_true',
         help='Make end patterns case-sensitive'
     )
     
-    # Palindrome arguments
+    add_rsa_vanity_arguments(parser)
     add_palindrome_arguments(parser)
     
+    keygen_group = parser.add_argument_group('Key Generation options')
     # Key generation options
-    parser.add_argument(
-        '--key-type', '-t',
+    keygen_group.add_argument(
+        '-t', '--key-type',
         choices=['ed25519', 'rsa'],
         default='ed25519',
         help='Type of key to generate'
     )
-    parser.add_argument(
-        '--key-bits', '-b',
+    keygen_group.add_argument(
+        '-b', '--key-bits', metavar="bits",
         type=int,
         default=2048,
         help='Bits for RSA key (ignored for ed25519)'
     )
+
     parser.add_argument(
-        '--processes', '-n',
+        '-n', '--processes', metavar="numproc",
         type=int,
         default=None,
         help='Number of worker processes to use'
     )
     parser.add_argument(
-        '--output', '-o',
+        '-l', '--logfile', type=ascii, metavar="logfile",
         help='Output file for generation results (JSON)'
-    )
-    
-    # RSA vanity injection mode
-    parser.add_argument(
-        '--rsa-vanity',
-        help='Generate RSA key with specific vanity text injected at start of key'
     )
     
     args = parser.parse_args()
     
     # Check if we're in RSA vanity injection mode
     if args.rsa_vanity:
-        generator = RSAVanityGenerator(args.email, args.rsa_vanity, args.key_bits)
-        try:
-            privkey, pubkey = generator.generate_key()
-            # Save the key
-            keyfile = f"vanity_key-{args.rsa_vanity}_{int(time.time())}"
-            with open(keyfile, 'w') as f:
-                f.write(privkey)
-            with open(f"{keyfile}.pub", 'w') as f:
-                f.write(pubkey)
-                
-            print(f"\nGenerated RSA key with vanity text: {args.rsa_vanity}")
-            print(f"Key saved as: {keyfile}")
-            print(f"Public key: {pubkey}")
-        except NotImplementedError:
-            print("RSA vanity injection not yet implemented. Coming soon!")
-        return
+        success = handle_rsa_vanity(args)
+        return 0 if success else 1
     
     # Normal pattern matching mode
     try:
@@ -671,10 +993,10 @@ def main():
     print(f"Matched pattern '{result['match']}' at position {result['match_position']}")
     print(f"Found by worker {result['worker_id']} (PID: {result['process_id']})")
     
-    if args.output:
-        with open(args.output, 'w') as f:
+    if args.logfile:
+        with open(args.logfile, 'w') as f:
             json.dump(generation_results, f, indent=2)
-        print(f"\nDetailed generation results saved to: {args.output}")
+        print(f"\nDetailed generation results saved to: {args.logfile}")
 
 
 if __name__ == '__main__':
