@@ -24,7 +24,7 @@ try:
     HAVE_GMPY2 = True
 except ImportError:
     HAVE_GMPY2 = False
-    print("Note: For 100x faster performance, install gmpy2: pip install gmpy2")
+    print("Note: For 10x performance, install gmpy2: pip install gmpy2")
 
 class KeyParser:
     ED25519_HEADER = 'AAAAC3NzaC1lZDI1NTE5AAAA'

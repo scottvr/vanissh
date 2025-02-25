@@ -28,46 +28,69 @@ So naturally a tool started taking shape in my mind that would take a string, or
 # Usage
 
 ```bash
-usage: vanissh.py [-h] --email EMAIL [--anywhere-pattern ANYWHERE_PATTERN]
-                  [--start-pattern START_PATTERN] [--end-pattern END_PATTERN]
-                  [--case-sensitive-anywhere] [--case-sensitive-start]
-                  [--case-sensitive-end]
-                  [--palindrome-length PALINDROME_LENGTH | --palindrome-start PALINDROME_START]
-                  [--use-free-i] [--key-type {ed25519,rsa}] [--key-bits KEY_BITS]
-                  [--output OUTPUT]
-
+usage: vanissh.py [-h] [-e email/comment] [-ap vanity_str] [-sp vanity_str]
+                  [-ep vanity_str] [-ca] [-cs] [-ce] [-rp vanity_str] [-O]
+                  [-st {0.0,1.0}] [-pl {0,22} | -ps vanity_str] [-ui] [-pc]
+                  [-t {ed25519,rsa}] [-b bits] [-n numproc] [-l logfile]
 ```
 # Options
 ```bash
+
+Note: For 10x performance, install gmpy2: pip install gmpy2
+usage: vanissh.py [-h] [-e email/comment] [-ap vanity_str] [-sp vanity_str]
+                  [-ep vanity_str] [-ca] [-cs] [-ce] [-rp vanity_str] [-O]
+                  [-st {0.0,1.0}] [-pl {0,22} | -ps vanity_str] [-ui] [-pc]
+                  [-t {ed25519,rsa}] [-b bits] [-n numproc] [-l logfile]
+
 optional arguments:
   -h, --help            show this help message and exit
-  --email EMAIL, -e EMAIL
+  -e email/comment, --email email/comment
                         Email address for key comment
-  --anywhere-pattern ANYWHERE_PATTERN, -ap ANYWHERE_PATTERN
-                        Pattern to match anywhere in the key
-  --start-pattern START_PATTERN, -sp START_PATTERN
-                        Pattern that must match at start of key
-  --end-pattern END_PATTERN, -ep END_PATTERN
-                        Pattern that must match at end of key
-  --case-sensitive-anywhere, -ca
-                        Make anywhere patterns case-sensitive
-  --case-sensitive-start, -cs
-                        Make start patterns case-sensitive
-  --case-sensitive-end, -ce
-                        Make end patterns case-sensitive
-  --key-type {ed25519,rsa}, -t {ed25519,rsa}
-                        Type of key to generate
-  --key-bits KEY_BITS, -b KEY_BITS
-                        Bits for RSA key (ignored for ed25519)
-  --output OUTPUT, -o OUTPUT
+  -n numproc, --processes numproc
+                        Number of worker processes to use
+  -l logfile, --logfile logfile
                         Output file for generation results (JSON)
 
+Vanity Pattern options:
+  -ap vanity_str, --anywhere-pattern vanity_str
+                        Pattern to match anywhere in the key
+  -sp vanity_str, --start-pattern vanity_str
+                        Pattern that must match at start of key
+  -ep vanity_str, --end-pattern vanity_str
+                        Pattern that must match at end of key
+  -ca, --case-sensitive-anywhere
+                        Make anywhere patterns case-sensitive
+  -cs, --case-sensitive-start
+                        Make start patterns case-sensitive
+  -ce, --case-sensitive-end
+                        Make end patterns case-sensitive
+
+RSA Vanity Injection:
+  -rp vanity_str, --rsa-vanity vanity_str
+                        Generate RSA key with specific vanity text injected at
+                        start of key
+  -O, --optimize        Suggest optimized variations of the vanity text for
+                        faster generation
+  -st {0.0,1.0}, --similarity {0.0,1.0}
+                        Minimum visual similarity for optimized variations
+                        (0.0-1.0)
+
 Palindrome options:
-  --palindrome-length PALINDROME_LENGTH
+  -pl {0,22}, --palindrome-length {0,22}
                         Generate any palindrome of this total length
-  --palindrome-start PALINDROME_START
+  -ps vanity_str, --palindrome-start vanity_str
                         Generate a palindrome starting with these characters
-  --use-free-i          Use the guaranteed "I" character as part of the palindrome
+  -ui, --use-free-i     Use the guaranteed "I" character as part of the
+                        palindrome
+  -pc, --palindrome-case-sensitive
+                        Make palindrome matching case-sensitive
+
+Key Generation options:
+  -t {ed25519,rsa}, --key-type {ed25519,rsa}
+                        Type of key to generate
+  -b bits, --key-bits bits
+                        Bits for RSA key (ignored for ed25519)
+
 ```
 # Examples
 
