@@ -21,7 +21,7 @@ I chuckled at the notion of running the command over and over again until you ge
 
 So naturally a tool started taking shape in my mind that would take a string, or perhaps a wordlist, and maybe even allow the user to specify where they would like to see the string... hmmm.
 
-There were several _almost there_ iterations, allowing for a "prefix" or "suffix" or "anywhere" placement of the target string, and various ideas that turns out not so great along the way, eventually settling on letting the user supply a regex instead of just a string or wordlist, and re-implementing the "where to match" arguments in a sort of convoluted way for flexibility. In the process of some trial-and-error learning and attempts at optimization (I'm sure there's lots that can still be done to make it more performant) I ended up learning in one night things I had never known about ssh keys in the previous 30 years so a portion of this README will share that journey. But first...
+There were several _almost there_ iterations, allowing for a "prefix" or "suffix" or "anywhere" placement of the target string, and various ideas that turned out not so great along the way, eventually settling on letting the user supply a regex instead of just a string or wordlist, and re-implementing the "where to match" arguments in a sort of convoluted way for flexibility. In the process of some trial-and-error learning and attempts at optimization (I'm sure there's lots that can still be done to make it more performant) I ended up learning in one night things I had never known about ssh keys in the previous 30 years so a portion of this README will share that journey. But first...
 
 # Usage
 
