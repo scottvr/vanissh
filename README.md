@@ -1,5 +1,7 @@
 # VANISSH - Vanity SSH key generator
 
+![If they can't tell how l33t you are by having a vanity public key, make it explicit](https://github.com/scottvr/vanissh/blob/f1cad4023864831e3ea8e4a099ee30525ce34f23/vanisshex.png)
+
 ## on the origin of vanissh
 I was importing some public keys into an authorized_keys file manually for a small side project and noticed that about half of them were rsa2048 and the rest were ed25519, and that the Base64-encoded ed25519 keys were much shorter in length than the RSA keys, and then realized I knew nothing about the current state of recommended keysize and cipher and thought I should take a moment to learn. 
 
