@@ -225,7 +225,7 @@ BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+
 class RSAVanityKeyGenerator:
     """Generate RSA keys with vanity strings at specified positions"""
     
-    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, similarity=0.7):
+    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, similarity=0.7, injection_pos=38):
         self.email = email
         self.vanity_text = vanity_text
         self.key_bits = key_bits
