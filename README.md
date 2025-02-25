@@ -142,7 +142,7 @@ Palindrome options:
 ok.. back to what you were reading before...
 ----
 
-*there is a bit of post-match checking for  magic that occurs in the unlikely event that you specified a pattern in such a way where say a five-letter pattern is specified as well as a three-letter pattern that is found within that longer pattern. If it is about to declare a winning three-letter pattern, it will check just in case you get lucky and alert you if surrounding characters mean you also matched the five-letter pattern. I'm working on allowing the known characters of the pre-amble (I'll talk about this in a later section) to be checked in the event you have a `start` or `anywhere` pattern where the "AI" at the start of the Base64-encoded 32-byte key of your new ed25519 key.
+*there is a bit of post-match checking for  magic that occurs in the unlikely event that you specified a pattern in such a way where say a five-letter pattern is specified as well as a three-letter pattern that is found within that longer pattern. If it is about to declare a winning three-letter pattern, it will check just in case you get lucky and alert you if surrounding characters mean you also matched the five-letter pattern. I'm working on allowing the known characters of the pre-amble (I'll talk about this in a later section) to be checked in the event you have a `start` or `anywhere` pattern where the "AI" at the start of the Base64-encoded 32-byte key of your new ed25519 key can be used to save two characters of generation. A FREE 'i' or FREE 'AI' even!
 
 # some output examples
 ```bash
