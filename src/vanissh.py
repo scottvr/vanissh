@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import subprocess
 import re
 import argparse
 from pathlib import Path
@@ -13,8 +12,14 @@ from datetime import datetime
 import platform
 import os
 
+from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+
+
 class KeyParser:
-    ED25519_HEADER = 'AAAAC3NzaC1lZDI1NTE5AAAA' # what's with the 'I' that is always there after the AAAA key preamble?
+    ED25519_HEADER = 'AAAAC3NzaC1lZDI1NTE5AAAA'
     RSA_HEADER = 'AAAAB3NzaC1yc2E'
     # Known RSA exponent patterns
     RSA_EXPONENTS = {
@@ -22,7 +27,6 @@ class KeyParser:
         17: 'AAAABEQ',
         257: 'AAAACAQE',
         65537: 'AAAADAQAB'
-        # etc?
     }
     
     # Known RSA modulus length indicators
@@ -30,17 +34,13 @@ class KeyParser:
         1024: 'AAAAg',
         2048: 'AAABAQ',
         4096: 'AAACAQ'  
-        # etc?
     }
 
     @staticmethod
     def get_header_length(key_type):
         """Return the length of the header for the given key type"""
         if key_type == 'ed25519':
-            return (len(KeyParser.ED25519_HEADER) + 1) # plus one to account for the 'I' mentioned when we define the header. 
-                                                       # I haven't found an explanation for the 'I' so I'm not comfortable assuming 
-                                                       # it will always be 'I', but I am pretty certain there is always a letter there 
-                                                       # that we have no chance of including in our character space for our vanity string
+            return (len(KeyParser.ED25519_HEADER) + 1)  # +1 for the mystery I
         elif key_type == 'rsa':
             return len(KeyParser.RSA_HEADER)
         return None
@@ -96,39 +96,29 @@ class KeyParser:
             return None
         return None
 
+
 class PatternSpec:
+    """Specification for a pattern to match in a key"""
+    
     def __init__(self, pattern, anchor='anywhere', case_sensitive=False, key_type='ed25519'):
         self.pattern = pattern
         self.anchor = anchor
         self.case_sensitive = case_sensitive
         self.key_type = key_type
         self._compiled = None
-    
+
+        # Validate pattern against key constraints
+        self._validate_pattern()
+
     def _validate_pattern(self):
         """Validate pattern against key type constraints"""
         if self.key_type == 'ed25519':
             max_length = KeyParser.get_matchable_length('ed25519')
-            patterns = self.pattern.split('|')
-
-            for p in patterns:
-                if len(p) > max_length:
-                    raise ValueError(
-                        f"Pattern '{p}' is too long for ed25519 key "
-                        f"(max {max_length} chars)"
-                    )
-
-# Oh.. that's not so easy since we allow regex as pattern (literal chars in a regex 
-# such as if the user specifies -ap "[a-z]" those brackets and hyphen woulnd't match.
-# Perhaps an easier way is to just add a flag that says --use-regex or something that
-# really boils down to the user accepting that their regex should not allow or specify
-# chars that are not valid in Base64
-#                # Check if pattern could appear in base64
-#                if not all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-#                          for c in p if c not in '^$'):
-#                    raise ValueError(
-#                        f"Pattern '{p}' contains characters that cannot "
-#                        "appear in base64-encoded data"
-#                    )
+            if max_length and len(self.pattern) > max_length:
+                raise ValueError(
+                    f"Pattern '{self.pattern}' is too long for ed25519 key "
+                    f"(max {max_length} chars)"
+                )
 
     def compile(self):
         """Compile the pattern with appropriate anchors"""
@@ -155,7 +145,117 @@ class PatternSpec:
         return self._compiled.search(text)
 
 
+def generate_palindrome_pattern(length):
+    """
+    Generate a regex pattern that matches palindromes of specified length.
+    Length must be at least 2.
+    """
+    if length < 2:
+        raise ValueError("Length must be at least 2")
+        
+    half_length = length // 2
+    middle_char = length % 2  # 1 if odd length, 0 if even
+    
+    # First, construct all the capture groups
+    pattern = ''
+    for i in range(half_length):
+        pattern += f'(.)'
+        
+    # Add middle character if odd length - no longer optional!
+    if middle_char:
+        pattern += '(.)'
+        
+    # Now add backreferences in reverse order
+    for i in range(half_length, 0, -1):
+        pattern += f'\\{i}'
+        
+    return pattern
+
+
+class CryptoKeyGenerator:
+    """Generate keys using the cryptography library"""
+    
+    def __init__(self, email, key_type='ed25519', key_bits=2048):
+        self.email = email
+        self.key_type = key_type
+        self.key_bits = key_bits
+        
+    def generate_key(self):
+        """Generate a key pair using the cryptography library"""
+        if self.key_type == 'ed25519':
+            private_key = ed25519.Ed25519PrivateKey.generate()
+        else:  # rsa
+            private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=self.key_bits
+            )
+            
+        # Get private key PEM
+        private_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        ).decode()
+        
+        # Get public key in OpenSSH format
+        public_ssh = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH
+        ).decode()
+        
+        # Add comment to public key if not already present
+        if not public_ssh.endswith(self.email):
+            public_ssh = f"{public_ssh} {self.email}"
+            
+        return private_pem, public_ssh
+
+
+class RSAVanityGenerator:
+    """Generate RSA keys with specific vanity text at known positions"""
+    
+    def __init__(self, email, vanity_text, key_bits=2048):
+        self.email = email
+        self.vanity_text = vanity_text
+        self.key_bits = key_bits
+        self.base64_chars = (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "abcdefghijklmnopqrstuvwxyz"
+            "0123456789/+"
+        )
+        
+    def is_valid_vanity(self):
+        """Check if vanity text contains only valid base64 characters"""
+        return all(c in self.base64_chars for c in self.vanity_text)
+        
+    def inject_vanity_ssh(self, priv_key):
+        """Embed the vanity text in an SSH-format public key"""
+        
+        raise NotImplementedError("RSA vanity injection not yet implemented")
+        
+    def make_valid_rsa_key(self, priv_key, pub_key):
+        """Generate a valid private key, with N close to the N from pub_key"""
+        
+       
+        raise NotImplementedError("RSA key validation not yet implemented")
+        
+    def generate_key(self):
+        """Generate a valid RSA key with the vanity text"""
+        # Check if vanity is valid
+        if not self.is_valid_vanity():
+            raise ValueError(f"Vanity text '{self.vanity_text}' contains invalid characters")
+            
+        # looking at github.com/vanity_rsa we see that
+        # Steps would be:
+        # 1. Generate a normal RSA key
+        # 2. Inject the vanity text
+        # 3. Make the key valid again
+        # 4. Return the key pair
+        raise NotImplementedError("RSA vanity generation not yet implemented")
+
+
 class VanityKeyGeneration:
+    """Generate and check keys for vanity patterns"""
+    
     def __init__(self, email, patterns, key_type='ed25519', key_bits=2048):
         self.email = email
         self.patterns = patterns  # List of PatternSpec objects
@@ -164,85 +264,54 @@ class VanityKeyGeneration:
         self.found_key = multiprocessing.Event()
         self.result_queue = multiprocessing.Queue()
         self.stats = GenerationStats()
-
+        
     def _key_worker(self, worker_id):
         """Worker process to generate and test keys"""
+        generator = CryptoKeyGenerator(self.email, self.key_type, self.key_bits)
+        
         while not self.found_key.is_set():
-            # Generate a new key pair
-            key_file = f"temp_key_{os.getpid()}_{worker_id}"
-            cmd = ['ssh-keygen']
+            # Generate key in-process
+            privkey, pubkey = generator.generate_key()
             
-            if self.key_type == 'ed25519':
-                cmd.extend(['-t', 'ed25519'])
-            else:  # RSA
-                cmd.extend([
-                    '-t', 'rsa',
-                    '-b', str(self.key_bits)
-                ])
-                
-            cmd.extend([
-                '-f', key_file,
-                '-C', self.email,
-                '-N', '',
-                '-q'  # Quiet mode
-            ])
+            # Extract only the meaningful portion for matching
+            key_part, offset = KeyParser.extract_matchable_portion(pubkey, self.key_type)
+            if not key_part:
+                continue  # Invalid or unexpected key format
             
-            subprocess.run(cmd)
+            self.stats.increment_attempts()
             
-            try:
-                with open(f"{key_file}.pub") as f:
-                    pubkey = f.read().strip()
-                with open(key_file) as f:
-                    privkey = f.read()
-
-                # Extract only the meaningful portion for matching
-                key_part, offset = KeyParser.extract_matchable_portion(pubkey, self.key_type)
-                if not key_part:
-                    continue  # Invalid or unexpected key format
-
-                # Update statistics
-                self.stats.increment_attempts()
-
-                # Store original key for reporting
-                full_key_part = pubkey.split()[1]
-
-                # Check all patterns against the meaningful portion
-                for pattern_spec in self.patterns:
-                    match = pattern_spec.match(key_part)
-                    if match:
-                        # Use the offset returned from extract_matchable_portion
-                        match_start = match.span()[0] + offset
-                        match_end = match.span()[1] + offset
-
-                        # Save the winning key
-                        safe_pattern = re.sub(r'[^a-zA-Z0-9]', '_', match.group(0))
-                        keyfile = f"vanity_key-{safe_pattern}_{int(time.time())}"
-                        with open(keyfile, 'w') as f:
-                            f.write(privkey)
-                        with open(f"{keyfile}.pub", 'w') as f:
-                            f.write(pubkey)
-
-                        self.result_queue.put({
-                            'public': pubkey,
-                            'private': privkey,
-                            'matched_part': full_key_part,
-                            'match': match.group(0),
-                            'match_position': (match_start, match_end),
-                            'worker_id': worker_id,
-                            'process_id': os.getpid(),
-                            'pattern': pattern_spec.pattern,
-                            'anchor': pattern_spec.anchor
-                        })
-                        self.found_key.set()
-                        break
-            finally:
-                # Clean up temporary files
-                try:
-                    Path(key_file).unlink()
-                    Path(f"{key_file}.pub").unlink()
-                except FileNotFoundError:
-                    pass
-
+            full_key_part = pubkey.split()[1]
+            
+            # Check all patterns against the meaningful portion
+            for pattern_spec in self.patterns:
+                match = pattern_spec.match(key_part)
+                if match:
+                    # Use the offset returned from extract_matchable_portion
+                    match_start = match.span()[0] + offset
+                    match_end = match.span()[1] + offset
+                    
+                    # Save the winning key
+                    safe_pattern = re.sub(r'[^a-zA-Z0-9]', '_', match.group(0))
+                    keyfile = f"vanity_key-{safe_pattern}_{int(time.time())}"
+                    with open(keyfile, 'w') as f:
+                        f.write(privkey)
+                    with open(f"{keyfile}.pub", 'w') as f:
+                        f.write(pubkey)
+                    
+                    self.result_queue.put({
+                        'public': pubkey,
+                        'private': privkey,
+                        'matched_part': full_key_part,
+                        'match': match.group(0),
+                        'match_position': (match_start, match_end),
+                        'worker_id': worker_id,
+                        'process_id': os.getpid(),
+                        'pattern': pattern_spec.pattern,
+                        'anchor': pattern_spec.anchor,
+                        'keyfile': keyfile
+                    })
+                    self.found_key.set()
+                    break
 
     def _metrics_recorder(self):
         """Thread to record performance metrics"""
@@ -250,8 +319,11 @@ class VanityKeyGeneration:
             self.stats.record_metrics()
             time.sleep(self.stats.sampling_interval)
     
-    def run_generation(self):
+    def run_generation(self, num_processes=None):
         """Run the generation with multiple processes"""
+        if num_processes is None:
+            num_processes = multiprocessing.cpu_count()
+            
         processes = []
 
         # Start metrics recording thread
@@ -259,7 +331,7 @@ class VanityKeyGeneration:
         metrics_thread.start()
 
         # Start worker processes
-        for i in range(multiprocessing.cpu_count()):
+        for i in range(num_processes):
             p = multiprocessing.Process(
                 target=self._key_worker,
                 args=(i,),
@@ -272,14 +344,12 @@ class VanityKeyGeneration:
         result = self.result_queue.get()
         duration = time.time() - self.stats.start_time
 
-        # Clean up processes
         for p in processes:
             p.terminate()
 
         # Calculate final statistics
         generation_stats = self.stats.calculate_statistics(duration)
 
-        # Add system information
         system_info = {
             'cpu_model': platform.processor(),
             'cpu_count': multiprocessing.cpu_count(),
@@ -289,7 +359,6 @@ class VanityKeyGeneration:
             'platform': platform.platform()
         }
 
-        # Combine all results
         generation_results = {
             'timestamp': datetime.now().isoformat(),
             'system_info': system_info,
@@ -318,7 +387,10 @@ class VanityKeyGeneration:
 
         return result, generation_results
 
+
 class GenerationStats:
+    """Track key generation statistics"""
+    
     def __init__(self):
         self.start_time = time.time()
         self.attempts = multiprocessing.Value('i', 0)
@@ -365,14 +437,14 @@ class GenerationStats:
             'min': min(min(f) for f in self.cpu_freqs if f),
             'max': max(max(f) for f in self.cpu_freqs if f),
             'avg': sum(sum(f)/len(f) for f in self.cpu_freqs if f) / len(self.cpu_freqs)
-        } if self.cpu_freqs else {}
+        } if self.cpu_freqs and any(f for f in self.cpu_freqs) else {}
         
         # Calculate temperature statistics if available
         temp_stats = {
             'min': min(min(t) for t in self.cpu_temps if t),
             'max': max(max(t) for t in self.cpu_temps if t),
             'avg': sum(sum(t)/len(t) for t in self.cpu_temps if t) / len(self.cpu_temps)
-        } if self.cpu_temps else {}
+        } if self.cpu_temps and any(t for t in self.cpu_temps) else {}
         
         return {
             'total_attempts': total_attempts,
@@ -382,28 +454,7 @@ class GenerationStats:
             'cpu_frequency_mhz': freq_stats,
             'cpu_temperature_c': temp_stats
         }
-        return result, generation_results
-def generate_palindrome_pattern(length):
-    """
-    Generate a regex pattern that matches palindromes of specified length.
-    Length must be at least 2.
-    """
-    if length < 2:
-        raise ValueError("Length must be at least 2")
-        
-    half_length = length // 2
-    middle_char = length % 2  # 1 if odd length, 0 if even
-    
-    # Build the first half with capture groups
-    first_half = ''.join(f'(.)' for _ in range(half_length))
-    
-    # Build the second half with backreferences in reverse
-    second_half = ''.join(f'\\{i}' for i in range(half_length, 0, -1))
-    
-    # If odd length, add optional middle character
-    middle = '(.)' if middle_char else ''
-    
-    return first_half + middle + second_half
+
 
 def add_palindrome_arguments(parser):
     """Add palindrome-related arguments to the argument parser"""
@@ -427,6 +478,12 @@ def add_palindrome_arguments(parser):
         action='store_true',
         help='Use the guaranteed "I" character as part of the palindrome'
     )
+    palindrome_group.add_argument(
+        '--palindrome-case-sensitive', '-pc',
+        action='store_true',
+        help='Make palindrome matching case-sensitive'
+    )
+
 
 def collect_patterns(args):
     """Collect all patterns from arguments including palindromes"""
@@ -435,15 +492,15 @@ def collect_patterns(args):
     # Handle regular patterns
     if args.anywhere_pattern:
         for p in args.anywhere_pattern:
-            patterns.append(PatternSpec(p, 'anywhere', args.case_sensitive_anywhere))
+            patterns.append(PatternSpec(p, 'anywhere', args.case_sensitive_anywhere, args.key_type))
             
     if args.start_pattern:
         for p in args.start_pattern:
-            patterns.append(PatternSpec(p, 'start', args.case_sensitive_start))
+            patterns.append(PatternSpec(p, 'start', args.case_sensitive_start, args.key_type))
             
     if args.end_pattern:
         for p in args.end_pattern:
-            patterns.append(PatternSpec(p, 'end', args.case_sensitive_end))
+            patterns.append(PatternSpec(p, 'end', args.case_sensitive_end, args.key_type))
     
     # Handle palindrome patterns
     if args.palindrome_length:
@@ -452,12 +509,10 @@ def collect_patterns(args):
             if length < 1:
                 raise ValueError("Palindrome length must be at least 3 when using guaranteed I")
             pattern = 'I' + generate_palindrome_pattern(length) + 'I'
-            print(f"Generated palindrome pattern (with I): {pattern}")  # Debug
         else:
             pattern = generate_palindrome_pattern(args.palindrome_length)
-            print(f"Generated palindrome pattern: {pattern}")  # Debug
-        patterns.append(PatternSpec(pattern, 'anywhere', False))
-
+        patterns.append(PatternSpec(pattern, 'anywhere', args.palindrome_case_sensitive, args.key_type))
+            
     elif args.palindrome_start:
         start_chars = args.palindrome_start
         if args.use_free_i and not start_chars.startswith('I'):
@@ -467,12 +522,13 @@ def collect_patterns(args):
         pattern = ''.join(f'({c})' for c in start_chars)
         # Add backreferences in reverse
         pattern += ''.join(f'\\{i}' for i in range(len(start_chars), 0, -1))
-        patterns.append(PatternSpec(pattern, 'anywhere', False))
+        patterns.append(PatternSpec(pattern, 'anywhere', args.palindrome_case_sensitive, args.key_type))
     
     if not patterns:
         raise ValueError("At least one pattern or palindrome must be specified")
         
     return patterns
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -517,9 +573,11 @@ def main():
         action='store_true',
         help='Make end patterns case-sensitive'
     )
-   # Add palindrome arguments
+    
+    # Palindrome arguments
     add_palindrome_arguments(parser)
-        
+    
+    # Key generation options
     parser.add_argument(
         '--key-type', '-t',
         choices=['ed25519', 'rsa'],
@@ -533,18 +591,49 @@ def main():
         help='Bits for RSA key (ignored for ed25519)'
     )
     parser.add_argument(
+        '--processes', '-n',
+        type=int,
+        default=None,
+        help='Number of worker processes to use'
+    )
+    parser.add_argument(
         '--output', '-o',
         help='Output file for generation results (JSON)'
     )
     
+    # RSA vanity injection mode
+    parser.add_argument(
+        '--rsa-vanity',
+        help='Generate RSA key with specific vanity text injected at start of key'
+    )
+    
     args = parser.parse_args()
     
-    # Collect all patterns including palindromes
+    # Check if we're in RSA vanity injection mode
+    if args.rsa_vanity:
+        generator = RSAVanityGenerator(args.email, args.rsa_vanity, args.key_bits)
+        try:
+            privkey, pubkey = generator.generate_key()
+            # Save the key
+            keyfile = f"vanity_key-{args.rsa_vanity}_{int(time.time())}"
+            with open(keyfile, 'w') as f:
+                f.write(privkey)
+            with open(f"{keyfile}.pub", 'w') as f:
+                f.write(pubkey)
+                
+            print(f"\nGenerated RSA key with vanity text: {args.rsa_vanity}")
+            print(f"Key saved as: {keyfile}")
+            print(f"Public key: {pubkey}")
+        except NotImplementedError:
+            print("RSA vanity injection not yet implemented. Coming soon!")
+        return
+    
+    # Normal pattern matching mode
     try:
         patterns = collect_patterns(args)
     except ValueError as e:
         parser.error(str(e))
-       
+    
     generation = VanityKeyGeneration(
         args.email,
         patterns,
@@ -552,10 +641,9 @@ def main():
         args.key_bits
     )
     
-    print(f"Starting generation with {multiprocessing.cpu_count()} processes...")
-    start_time = time.time()
+    print(f"Starting generation with {args.processes or multiprocessing.cpu_count()} processes...")
     
-    result, generation_results = generation.run_generation()
+    result, generation_results = generation.run_generation(args.processes)
 
     # Print summary
     print("\nGeneration Results:")
@@ -586,7 +674,8 @@ def main():
     if args.output:
         with open(args.output, 'w') as f:
             json.dump(generation_results, f, indent=2)
-        print(f"\nDetailed generation results (benchmarks) saved to: {args.output}")
+        print(f"\nDetailed generation results saved to: {args.output}")
+
 
 if __name__ == '__main__':
     main()
