@@ -231,7 +231,8 @@ class RSAVanityKeyGenerator:
         self.key_bits = key_bits
         self.optimize = optimize
         self.similarity = similarity
-        
+        self.injection_pos = injection_pos
+
     def is_valid_vanity(self, text=None):
         """Check if vanity text contains only valid base64 characters"""
         if text is None:
@@ -315,13 +316,13 @@ class RSAVanityKeyGenerator:
         # 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAg'
         # We inject the vanity right after this prefix
         # The exact position might need adjustment based on key size
-        injection_pos = 38
+        pos = self.injection_pos
         
         # Inject the vanity text
         public_key_repr = (
-            public_key_repr[:injection_pos] +
+            public_key_repr[:pos] +
             vanity +
-            public_key_repr[injection_pos + len(vanity):]
+            public_key_repr[pos + len(vanity):]
         )
 
         # Load the modified (but likely invalid) key back
@@ -867,6 +868,31 @@ def collect_patterns(args):
         
     return patterns
 
+def test_injection_position(vanity_text, injection_positions, iterations=10):
+    results = {}
+    for pos in injection_positions:
+        timings = []
+        for _ in range(iterations):
+            generator = RSAVanityKeyGenerator(
+                email="test@example.com",
+                vanity_text=vanity_text,
+                key_bits=2048,
+                injection_pos=pos
+            )
+            start = time.time()
+            try:
+                # Only timing the generation (which includes key validation)
+                generator.generate_key()
+            except Exception as e:
+                print(f"Error at injection position {pos}: {e}")
+                continue
+            timings.append(time.time() - start)
+        if timings:
+            avg_time = statistics.mean(timings)
+            results[pos] = avg_time
+            print(f"Injection position {pos}: average time = {avg_time:.2f} seconds over {len(timings)} runs")
+    return results
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1000,4 +1026,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+#    main()
+    import time
+    import statistics
+    positions = list(range(30, 50))  # for example, testing positions 30 through 49
+    test_vanity = "VANITY"
+    results = test_injection_position(test_vanity, positions, iterations=20)
