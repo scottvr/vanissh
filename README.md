@@ -69,7 +69,7 @@ Palindrome options:
 ```
 # Examples
 
-You may wonder about the awkwardly-specific command-line arguments relating to the pattern you'd like to see, so I'll explain simple that they are there to enable flexibility on a single command invocation, in order to save time by increasing the chances *something* will match that you'll be pleased with. (Though there's still room for improvement such as allowing for ANDing multiple arguments or negative patterns. Of course, if you're determined enough since your patterns can be a valid regex, you can roll your own ANDing and negatives and anything else your regex-fu might enable.)
+You may wonder about the awkwardly-specific command-line arguments relating to the pattern you'd like to see, so I'll explain simply that they are there to enable flexibility on a single command invocation, in order to save time by increasing the chances *something* will match that you'll be pleased with. (Though there's still room for improvement such as allowing for ANDing multiple arguments or negative patterns. Of course, if you're determined enough since your patterns can be a valid regex, you can roll your own ANDing and negatives and anything else your regex-fu might enable.)
 
 ## This example below is a way to generate a public key that matches
 - any of "31337", "leet", "l33t", "elite" anywhere in the key's Base64-encoded string OR
