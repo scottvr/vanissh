@@ -225,7 +225,7 @@ BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+
 class RSAVanityKeyGenerator:
     """Generate RSA keys with vanity strings at specified positions"""
     
-    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, similarity=0.7, injection_pos=38):
+    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, similarity=0.7, injection_pos=40):
         self.email = email
         self.vanity_text = vanity_text
         self.key_bits = key_bits
@@ -314,6 +314,10 @@ class RSAVanityKeyGenerator:
 
         # Public keys with 65537 exponent all have the same prefix:
         # 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAg'
+        # USE THE RSA_HEADER VARS.. cuz that's only good for a 1024-bit key
+        # For 2048 it would look like this:
+        # 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ' so we need to be sure and adjust injection_pos_start in test loop
+        # also, clean this all up and consistently use the same constants and methods
         # We inject the vanity right after this prefix
         # The exact position might need adjustment based on key size
         pos = self.injection_pos
@@ -1029,6 +1033,6 @@ if __name__ == '__main__':
 #    main()
     import time
     import statistics
-    positions = list(range(30, 50))  # for example, testing positions 30 through 49
+    positions = list(range(40, 60))  # for example, testing positions 40 through 59
     test_vanity = "VANITY"
     results = test_injection_position(test_vanity, positions, iterations=20)
