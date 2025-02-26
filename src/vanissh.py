@@ -98,7 +98,7 @@ class KeyParser:
     def get_matchable_length(key_type='ed25519'):
         """Return the expected length of the matchable portion"""
         if key_type == 'ed25519':
-            return 43  # 32 bytes in base64 ≈ 43 chars
+            return 43  # 32 bytes in base64 =~ 43 chars
         elif key_type == 'rsa':
             # This varies by key size, return None to indicate variable length
             return None
