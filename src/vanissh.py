@@ -223,14 +223,13 @@ BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+
 
 class RSAVanityKeyGenerator:
     """Generate RSA keys with vanity strings at specified positions"""
-    
-    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, similarity=0.7, injection_pos=40):
+    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, similarity=0.7, injection_pos=None):
         self.email = email
         self.vanity_text = vanity_text
         self.key_bits = key_bits
         self.optimize = optimize
         self.similarity = similarity
-        self.injection_pos = injection_pos
+        self.injection_pos = injection_pos if injection_pos is not None else calculate_injection_position(key_bits)
 
     def is_valid_vanity(self, text=None):
         """Check if vanity text contains only valid base64 characters"""
@@ -300,7 +299,26 @@ class RSAVanityKeyGenerator:
             pub_ssh = f"{pub_ssh} {self.email}"
             
         return priv_pem, pub_ssh
+
+    def calculate_injection_position(key_bits=2048, exponent=65537):
+        """Calculate the exact injection position based on key parameters"""
+        # Get the appropriate header components
+        header = KeyParser.RSA_HEADER
+        exponent_encoding = KeyParser.RSA_EXPONENTS.get(exponent)
+        modulus_prefix = KeyParser.RSA_MODULUS_PREFIXES.get(key_bits)
         
+        # The injection position is right after all these components
+        # Start with 'ssh-rsa ' length (8 characters)
+        position = 8
+        if header:
+            position += len(header)
+        if exponent_encoding:
+            position += len(exponent_encoding)
+        if modulus_prefix:
+            position += len(modulus_prefix)
+            
+        return position
+
     def inject_vanity_ssh(self, priv_key):
         """Embed the vanity text in an SSH-format public key"""
         vanity = self.vanity_text.encode()
