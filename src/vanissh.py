@@ -124,7 +124,7 @@ class PatternSpec:
             max_length = KeyParser.get_matchable_length('ed25519')
             if max_length and len(self.pattern) > max_length:
                 raise ValueError(
-                    f"Pattern '{self.pattern}' is too long for ed25519 key "
+                    f"Pattern '{self.pattern}' is too long for ed25519 key",
                     f"(max {max_length} chars)"
                 )
 
