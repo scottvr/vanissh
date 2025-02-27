@@ -34,14 +34,8 @@ usage: vanissh.py [-h] [-e email/comment] [-ap vanity_str] [-sp vanity_str]
                   [-t {ed25519,rsa}] [-b bits] [-n numproc] [-l logfile]
 ```
 # Options
+
 ```bash
-
-Note: For 10x performance, install gmpy2: pip install gmpy2
-usage: vanissh.py [-h] [-e email/comment] [-ap vanity_str] [-sp vanity_str]
-                  [-ep vanity_str] [-ca] [-cs] [-ce] [-rp vanity_str] [-O]
-                  [-st {0.0,1.0}] [-pl {0,22} | -ps vanity_str] [-ui] [-pc]
-                  [-t {ed25519,rsa}] [-b bits] [-n numproc] [-l logfile]
-
 optional arguments:
   -h, --help            show this help message and exit
   -e email/comment, --email email/comment
