@@ -16,9 +16,19 @@ import statistics
 import base64
 import logging
 import math
+import logging
+import traceback
+import base64
+import struct
 
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
+import cryptography.hazmat.backends
+
+BACKEND = cryptography.hazmat.backends.default_backend()
+logging.basicConfig(level=logging.DEBUG)
+debug_logger = logging.getLogger('vanissh.debug')
+debug_logger.setLevel(logging.DEBUG)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -644,6 +654,32 @@ class RSAVanityKeyGenerator:
 
     def make_valid_rsa_key(self, priv_key, pub_key):
         """Generate a valid private key, with N close to the N from pub_key"""
+    
+        # Attempt to make the key valid by finding a Q which multiplies with P to
+        # form something close to N
+        n = pub_key.public_numbers().n
+        e = pub_key.public_numbers().e
+        p = priv_key.private_numbers().p
+        q = _close_prime(n // p)
+    
+        assert is_prime(e)
+        assert is_prime(p)
+        assert is_prime(q)
+    
+        # Compute D from the new P&Q
+        phi = (p - 1) * (q - 1)
+    
+        return rsa.RSAPrivateNumbers(
+            public_numbers=rsa.RSAPublicNumbers(e, p * q),
+            p=p, q=q, 
+            d=rsa.rsa_crt_iqmp(phi, e),
+            dmp1=rsa.rsa_crt_dmp1(e, p),
+            dmq1=rsa.rsa_crt_dmp1(e, q),
+            iqmp=rsa.rsa_crt_iqmp(p, q),
+        ).private_key(BACKEND)
+    
+    def fucked_make_valid_rsa_key(self, priv_key, pub_key):
+        """Generate a valid private key, with N close to the N from pub_key"""
         try:
             # Extract components from the keys
             n_target = pub_key.public_numbers().n
@@ -660,23 +696,48 @@ class RSAVanityKeyGenerator:
             q_target = n_target // p 
             logger.debug(f"Target q: {q_target}")
 
-            q = self.close_prime(q_target)
+            q = _close_prime(q_target)
             logger.debug(f"Found close prime q: {q}")
         
             n = p * q
             logger.debug(f"New modulus n: {n}")
-
-            # Compute the private key from p, q, and e
+      
+            # Calculate phi (Euler's totient function)
             phi = (p - 1) * (q - 1)
-            try:
-                d = self.mod_inverse(e, phi)
-                iqmp = self.mod_inverse(p, q)
-                dmp1 = d % (p - 1)
-                dmq1 = d % (q - 1)
-            except Exception as e:
-                logger.error(f"Error calculating private components")
-                raise
 
+            # Try to use the library's function for recovering private exponent
+            try:
+                from cryptography.hazmat.primitives.asymmetric.rsa import (
+                    rsa_recover_private_exponent,
+                    rsa_crt_dmp1,
+                    rsa_crt_dmq1,
+                    rsa_crt_iqmp
+                )
+                
+#                # Use the library's function to calculate d
+#                d = rsa_recover_private_exponent(e, p, q)
+#                logger.debug(f"obtained d from recover_private_exponents: {d}")
+                d = rsa_crt_iqmp(phi, e)
+                dmp1 = rsa_crt_dmp1(e, p)
+                dmq1 = rsa_crt_dmp1(e, q)
+                iqmp = rsa_crt_iqmp(p, q)
+                
+            except (ImportError, AttributeError):
+                # Fallback to manual calculation using Carmichael's totient
+                # Calculate lcm(p-1, q-1) instead of (p-1)*(q-1)
+                from math import gcd
+                
+                def lcm(a, b):
+                    return a * b // gcd(a, b)
+                    
+                phi = lcm(p - 1, q - 1)  # Carmichael's totient
+                d = self.mod_inverse(e, phi)
+            
+            # Calculate the CRT parameters
+            dmp1 = d % (p - 1)
+            dmq1 = d % (q - 1)
+            iqmp = self.mod_inverse(p, q)
+            
             # Create a new private key with these values
             private_numbers = rsa.RSAPrivateNumbers(
                 p=p,
@@ -685,121 +746,137 @@ class RSAVanityKeyGenerator:
                 dmp1=dmp1,
                 dmq1=dmq1,
                 iqmp=iqmp,
-                public_numbers=rsa.RSAPublicNumbers(e=e, n=p*q)
+                public_numbers=rsa.RSAPublicNumbers(e=e, n=n)
             )
-
+            
+            # Get the key and validate it
             valid_key = private_numbers.private_key()
-            valid_key.private_numbers() # this raises an error if invalid
-
             return valid_key
-
+                
         except Exception as e:
-            logger.error(f"error in make_valid_rsa_key(): {e}")
+            logger.error(f"Error in make_valid_rsa_key: {e}")
+            return None
+    
+#            # Compute the private key from p, q, and e
+#            phi = (p - 1) * (q - 1)
+#            try:
+#                d = self.mod_inverse(e, phi)
+#                iqmp = self.mod_inverse(p, q)
+#                dmp1 = d % (p - 1)
+#                dmq1 = d % (q - 1)
+#            except Exception as e:
+#                logger.error(f"Error calculating private components")
+#                raise
+#
+#            # Create a new private key with these values
+#            private_numbers = rsa.RSAPrivateNumbers(
+#                p=p,
+#                q=q,
+#                d=d,
+#                dmp1=dmp1,
+#                dmq1=dmq1,
+#                iqmp=iqmp,
+#                public_numbers=rsa.RSAPublicNumbers(e=e, n=p*q)
+#            )
+#
+#            valid_key = private_numbers.private_key()
+#            valid_key.private_numbers() # this raises an error if invalid
+#
+#            return valid_key
+#
+#        except Exception as e:
+#            logger.error(f"error in make_valid_rsa_key(): {e}")
         
-    def close_prime(self, n):
-        """Find a prime number close to n using the selected method"""
-        if self.is_prime(n):
-            logger.debug(f"Target value {n} is already prime")
-            return n
-            
-        # Ensure we're working with an odd number
-        if n % 2 == 0:
-            n += 1
-            
-        logger.debug(f"Looking for prime near {n} using method: {self.prime_selection}")
-        
-        if self.prime_selection == 'exact':
-            # This is a placeholder - exact method would require a completely different approach
-            # that doesn't modify the key at all, just generates keys until one matches the pattern
-            logger.warning("Exact prime selection not implemented - falling back to closest")
-            self.prime_selection = 'closest'
-        
-        if self.prime_selection == 'closest':
-            # Find the closest prime (deterministic approach)
-            offset = 0
-            max_offset = 1000000  # Safety limit
-            
-            while offset < max_offset:
-                # Try positive offset first
-                if self.is_prime(n + offset):
-                    prime = n + offset
-                    logger.debug(f"Found closest prime {prime} with +{offset} offset")
-                    return prime
-                    
-                # Then try negative offset
-                if offset > 0 and n - offset > 1 and self.is_prime(n - offset):
-                    prime = n - offset
-                    logger.debug(f"Found closest prime {prime} with -{offset} offset")
-                    return prime
-                    
-                # Move to next odd number
-                offset += 2
-                
-            raise ValueError(f"Could not find any primes within {max_offset} of {n}")
-            
-        elif self.prime_selection == 'random':
-            # Find multiple primes and choose randomly for more entropy
-            nearby_primes = []
-            offset = 0
-            max_offset = 1000000  # Safety limit
-            
-            while len(nearby_primes) < self.prime_candidates and offset < max_offset:
-                # Try positive offset
-                if self.is_prime(n + offset):
-                    nearby_primes.append(n + offset)
-                    logger.debug(f"Found prime {n + offset} with +{offset} offset")
-                    
-                # Try negative offset
-                if offset > 0 and n - offset > 1 and self.is_prime(n - offset):
-                    nearby_primes.append(n - offset)
-                    logger.debug(f"Found prime {n - offset} with -{offset} offset")
-                    
-                # Move to next odd number
-                offset += 2
-                
-            if not nearby_primes:
-                raise ValueError(f"Could not find any primes within {max_offset} of {n}")
-                
-            # Choose randomly from the found primes
-            prime = random.choice(nearby_primes)
-            logger.debug(f"Randomly selected prime {prime} from {len(nearby_primes)} candidates")
-            return prime
-            
-    def is_prime(self, n, k=10):
-        """Check if a number is prime."""
-        # Basic checks
-        if n <= 1:
-            return False
-        if n <= 3:
-            return True
-        if n % 2 == 0:
-            return False
-        
-        if HAVE_GMPY2:
-            return gmpy2.is_prime(n)
-        else:
-            # Miller-Rabin primality test
-            # Find r and s such that n-1 = 2^s * r
-            r, s = n - 1, 0
-            while r % 2 == 0:
-                r //= 2
-                s += 1
-                
-            # Witness loop
-            for _ in range(k):
-                a = random.randrange(2, n - 1)
-                x = pow(a, r, n)
-                if x != 1 and x != n - 1:
-                    j = 1
-                    while j < s and x != n - 1:
-                        x = pow(x, 2, n)
-                        if x == 1:
-                            return False
-                        j += 1
-                    if x != n - 1:
-                        return False
-            return True
-            
+#        if self.prime_selection == 'exact':
+#            # This is a placeholder - exact method would require a completely different approach
+#            # that doesn't modify the key at all, just generates keys until one matches the pattern
+#            logger.warning("Exact prime selection not implemented - falling back to closest")
+#            self.prime_selection = 'closest'
+#        
+#        if self.prime_selection == 'closest':
+#            # Find the closest prime (deterministic approach)
+#            offset = 2
+#            max_offset = 100000000  # Safety limit
+#            
+#            while offset < max_offset:
+#                # Try positive offset first
+#                if self.is_prime(n + offset):
+#                    prime = n + offset
+#                    logger.debug(f"Found closest prime {prime} with +{offset} offset")
+#                    return prime
+#                    
+#                    prime = n - offset
+#                    logger.debug(f"Found closest prime {prime} with -{offset} offset")
+#                    return prime
+#                    
+#                # Move to next odd number
+#                offset += 2
+#                
+#            raise ValueError(f"Could not find any primes within {max_offset} of {n}")
+#            
+#        elif self.prime_selection == 'random':
+#            # Find multiple primes and choose randomly for more entropy
+#            nearby_primes = []
+#            offset = 0
+#            max_offset = 1000000  # Safety limit
+#            
+#            while len(nearby_primes) < self.prime_candidates and offset < max_offset:
+#                # Try positive offset
+#                if self.is_prime(n + offset):
+#                    nearby_primes.append(n + offset)
+#                    logger.debug(f"Found prime {n + offset} with +{offset} offset")
+#                    
+#                # Try negative offset
+#                if offset > 0 and n - offset > 1 and self.is_prime(n - offset):
+#                    nearby_primes.append(n - offset)
+#                    logger.debug(f"Found prime {n - offset} with -{offset} offset")
+#                    
+#                # Move to next odd number
+#                offset += 2
+#                
+#            if not nearby_primes:
+#                raise ValueError(f"Could not find any primes within {max_offset} of {n}")
+#                
+#            # Choose randomly from the found primes
+#            prime = random.choice(nearby_primes)
+#            logger.debug(f"Randomly selected prime {prime} from {len(nearby_primes)} candidates")
+#            return prime
+#            
+#    def is_prime(self, n, k=10):
+#        """Check if a number is prime."""
+#        # Basic checks
+#        if n <= 1:
+#            return False
+#        if n <= 3:
+#            return True
+#        if n % 2 == 0:
+#            return False
+#        
+#        if HAVE_GMPY2:
+#            return gmpy2.is_prime(n)
+#        else:
+#            # Miller-Rabin primality test
+#            # Find r and s such that n-1 = 2^s * r
+#            r, s = n - 1, 0
+#            while r % 2 == 0:
+#                r //= 2
+#                s += 1
+#                
+#            # Witness loop
+#            for _ in range(k):
+#                a = random.randrange(2, n - 1)
+#                x = pow(a, r, n)
+#                if x != 1 and x != n - 1:
+#                    j = 1
+#                    while j < s and x != n - 1:
+#                        x = pow(x, 2, n)
+#                        if x == 1:
+#                            return False
+#                        j += 1
+#                    if x != n - 1:
+#                        return False
+#            return True
+#            
     def mod_inverse(self, a, m):
         """Calculate the modular inverse of a mod m."""
         if HAVE_GMPY2:
@@ -1071,6 +1148,54 @@ class GenerationStats:
             'cpu_temperature_c': temp_stats
         }
 
+def _close_prime(n):
+    """Find a prime number close to n."""
+    if is_prime(n):
+        return n  # If already prime - return it as-is.
+
+    if not (n % 2):
+        n += 1
+
+    offset = 2
+    near_primes = []
+
+    # Find 10 primes near the provided number. This way we eliminate the bias
+    # towards primes near large primeless ranges.
+    while len(near_primes) < 10:
+        if is_prime(n + offset):
+            near_primes.append(n + offset)
+        if is_prime(n - offset):
+            near_primes.append(n - offset)
+        offset += 2
+
+    return random.choice(near_primes)
+
+try:
+    from gmpy2 import is_prime
+except ImportError:
+    def is_prime(n, k=10):
+        """Implementation of miller rabin prime test"""
+        s = 0
+        d = n - 1
+
+        while d % 2 == 0:
+            d >>= 1
+            s += 1
+
+        for _1 in range(k):
+            a = random.randrange(2, n - 1)
+            x = pow(a, d, n)
+            if x == 1:
+                return True
+            for _2 in range(s - 1):
+                if x == n - 1:
+                    return True
+                x = pow(x, 2, n)
+            if x != n - 1:
+                return False
+
+        return True
+ 
 def handle_rsa_vanity(args):
     """Handle RSA vanity key generation"""
     print(f"Generating RSA vanity key with text: {args.rsa_vanity}")
@@ -1574,8 +1699,8 @@ def main():
             }, f, indent=2)
 
     if args.rsa_vanity:
-        success = handle_rsa_vanity(args)
-        #success = handle_rsa_vanity_with_entropy(args)
+        #success = handle_rsa_vanity(args)
+        success = handle_rsa_vanity_with_entropy(args)
         return 0 if success else 1
     
     # Normal pattern matching mode
