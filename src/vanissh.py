@@ -657,10 +657,10 @@ class RSAVanityKeyGenerator:
 
             p = p_orig
             # Find a prime q such that p*q is close to n_target
-            target_q = n_target // p 
+            q_target = n_target // p 
             logger.debug(f"Target q: {q_target}")
 
-            q = self.close_prime(target_q)
+            q = self.close_prime(q_target)
             logger.debug(f"Found close prime q: {q}")
         
             n = p * q
@@ -868,7 +868,6 @@ class RSAVanityKeyGenerator:
         
         # Sort by score (highest first)
         return sorted(candidates, key=lambda x: x[1], reverse=True)
-
 
 class VanityKeyGeneration:
     """Generate and check keys for vanity patterns"""
@@ -1318,13 +1317,21 @@ def generate_palindrome_pattern(length):
         
     return pattern
 
-def test_injection_position(vanity_text, injection_positions, iterations=10):
+def test_injection_position(vanity_text, injection_positions, iterations=3):
+    """Test different injection positions to find reliable ones for vanity text insertion"""
     results = {}
     success_rates = {}
-
+    final_positions = {}  # Track where the pattern ends up in successful keys
+    
+    # Calculate the theoretically correct position
+    calculated_pos = KeyParser.calculate_injection_position(2048, 65537)
+    logger.info(f"Theoretically calculated injection position: {calculated_pos}")
+    
+    # Try a wide range of positions
     for pos in injection_positions:
         timings = []
         successes = 0
+        match_positions = []
         
         logger.info(f"Testing injection position {pos} with vanity text '{vanity_text}'")
         
@@ -1337,30 +1344,105 @@ def test_injection_position(vanity_text, injection_positions, iterations=10):
                 key_bits=2048,
                 injection_pos=pos
             )
-
+            
             start = time.time()
             try:
+                # Generate the key
                 priv_pem, pub_ssh = generator.generate_key()
+                
+                # Test the generated key
                 test_key(priv_pem, pub_ssh)
-
+                
                 elapsed = time.time() - start
                 timings.append(elapsed)
                 successes += 1
-
+                
                 logger.info(f"Success at position {pos}, iteration {i+1}: {elapsed:.2f} seconds")
                 
-                # Save successful key for examination
+                # Find where the pattern ended up in the final key
+                base64_part = pub_ssh.split()[1]
+                pattern_pos = base64_part.find(vanity_text)
+                if pattern_pos != -1:
+                    match_positions.append(pattern_pos)
+                    logger.info(f"Pattern found at position {pattern_pos} in final key")
+                else:
+                    # Try case-insensitive search as a fallback
+                    pattern_pos = base64_part.lower().find(vanity_text.lower())
+                    if pattern_pos != -1:
+                        match_positions.append(pattern_pos)
+                        logger.info(f"Pattern found at position {pattern_pos} in final key (case-insensitive)")
+                    else:
+                        logger.warning(f"Pattern not found in final key despite successful generation")
+                
+                # Create a temporary file name for the successful key
                 tmp_keyfile = f"vanity_key-rsa-test-pos{pos}-iter{i+1}_{int(time.time())}"
                 with open(tmp_keyfile, 'w') as f:
                     f.write(priv_pem)
                 with open(f"{tmp_keyfile}.pub", 'w') as f:
                     f.write(pub_ssh)
                 logger.info(f"Test key saved as: {tmp_keyfile}")
-
+                
             except Exception as e:
                 logger.error(f"Error at injection position {pos}, iteration {i+1}: {e}")
                 elapsed = time.time() - start
                 logger.info(f"Failed after {elapsed:.2f} seconds")
+                
+        # Calculate statistics for this position
+        if timings:
+            avg_time = sum(timings) / len(timings)
+            results[pos] = avg_time
+            success_rates[pos] = successes / iterations
+            if match_positions:
+                avg_match_pos = sum(match_positions) / len(match_positions)
+                final_positions[pos] = {
+                    'average': avg_match_pos,
+                    'positions': match_positions
+                }
+                logger.info(f"Position {pos}: average time = {avg_time:.2f} seconds, success rate = {success_rates[pos]*100:.0f}% ({successes}/{iterations}), pattern typically found at position {avg_match_pos:.1f} in final key")
+            else:
+                logger.info(f"Position {pos}: average time = {avg_time:.2f} seconds, success rate = {success_rates[pos]*100:.0f}% ({successes}/{iterations}), pattern not found in final key")
+        else:
+            logger.warning(f"Position {pos}: All attempts failed")
+            success_rates[pos] = 0
+    
+    # Find the best position based on success rate and speed
+    valid_positions = {p: t for p, t in results.items() if success_rates[p] > 0.5}
+    
+    if valid_positions:
+        best_pos = min(valid_positions.items(), key=lambda x: x[1])[0]
+        logger.info(f"Best injection position: {best_pos} (avg time: {results[best_pos]:.2f}s, success rate: {success_rates[best_pos]*100:.0f}%)")
+        if best_pos in final_positions:
+            logger.info(f"When injecting at position {best_pos}, pattern typically appears at position {final_positions[best_pos]['average']:.1f} in final key")
+    else:
+        logger.warning("No reliable injection position found with >50% success rate")
+        # Find any positions with at least one success
+        any_success = {p: t for p, t in results.items() if success_rates[p] > 0}
+        if any_success:
+            best_of_any = min(any_success.items(), key=lambda x: x[1])[0]
+            logger.info(f"Best of partially successful positions: {best_of_any} (avg time: {results[best_of_any]:.2f}s, success rate: {success_rates[best_of_any]*100:.0f}%)")
+    
+    # Save comprehensive results to JSON
+    result_data = {
+        'vanity_text': vanity_text,
+        'calculated_position': calculated_pos,
+        'injection_positions': injection_positions,
+        'times': {str(k): v for k, v in results.items()},
+        'success_rates': {str(k): v for k, v in success_rates.items()},
+        'final_pattern_positions': {str(k): {
+            'average': v['average'],
+            'positions': v['positions']
+        } for k, v in final_positions.items()},
+        'timestamp': time.time(),
+        'key_bits': 2048
+    }
+    
+    # Save the results
+    result_file = f"injection_positions_analysis_{int(time.time())}.json"
+    with open(result_file, 'w') as f:
+        json.dump(result_data, f, indent=2)
+    logger.info(f"Detailed analysis saved to {result_file}")
+    
+    return results, success_rates
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1370,7 +1452,7 @@ def main():
     
     parser.add_argument(
         '-e', '--email', metavar="email/comment",
-        #required=True,
+        required=True,
         help='Email address for key comment'
     )
     
@@ -1430,6 +1512,19 @@ def main():
     )
 
     parser.add_argument(
+        '-fp', '--find-position',
+        action='store_true',
+        help='Find optimal injection position'
+    )
+
+    parser.add_argument(
+        '-ip', '--injection-position', 
+        type=int,
+        default=None,
+        help='Specific position to inject into RSA key'
+    )
+
+    parser.add_argument(
         '-n', '--processes', metavar="numproc",
         type=int,
         default=None,
@@ -1442,8 +1537,45 @@ def main():
     
     args = parser.parse_args()
     
+    if args.find_position and args.key_bits:
+        logger.info(f"Finding optimal injection positions for {args.key_bits}-bit RSA keys")
+    
+        # Include a wide range of positions to test
+        if args.key_bits == 2048:
+            calculated_pos = KeyParser.calculate_injection_position(args.key_bits, 65537)
+            # Test around calculated position, plus ranges around other likely working positions
+            positions = list(range(calculated_pos - 5, calculated_pos + 15)) + \
+                    list(range(30, 50, 2)) + \
+                    list(range(50, 100, 5)) + \
+                    list(range(100, 400, 30))
+        else:
+            # For other key sizes, test a wide range
+            calculated_pos = KeyParser.calculate_injection_position(args.key_bits, 65537)
+            positions = list(range(calculated_pos - 5, calculated_pos + 15)) + \
+                    list(range(30, 400, 30))
+    
+        logger.info(f"Testing {len(positions)} positions including calculated position {calculated_pos}")
+    
+        # Test with a short vanity string
+        test_vanity = "AB"
+        logger.info(f"Testing with vanity text: {test_vanity}")
+    
+        results, success_rates = test_injection_position(test_vanity, positions, iterations=3)
+    
+        # Save results to JSON
+        result_file = f"injection_positions_{args.key_bits}bit_{int(time.time())}.json"
+        with open(result_file, 'w') as f:
+            json.dump({
+                'key_bits': args.key_bits,
+                'test_vanity': test_vanity,
+                'positions': positions,
+                'times': {str(k): v for k, v in results.items()},
+                'success_rates': {str(k): v for k, v in success_rates.items()}
+            }, f, indent=2)
+
     if args.rsa_vanity:
-        success = handle_rsa_vanity_with_entropy(args)
+        success = handle_rsa_vanity(args)
+        #success = handle_rsa_vanity_with_entropy(args)
         return 0 if success else 1
     
     # Normal pattern matching mode
@@ -1458,19 +1590,6 @@ def main():
         args.key_type,
         args.key_bits
     )
-    
-    # If showing entropy was requested
-    if args.show_entropy:
-        entropy_data = calculate_key_entropy(
-            args.key_type, 
-            args.key_bits,
-            None if args.key_type == 'ed25519' else args.prime_selection,
-            args.prime_candidates
-        )
-        display_entropy_info(entropy_data)
-    
-    return 0
-
     print(f"Starting generation with {args.processes or multiprocessing.cpu_count()} processes...")
     
     result, generation_results = generation.run_generation(args.processes)
@@ -1500,6 +1619,16 @@ def main():
     print(f"Public key: {result['public']}")
     print(f"Matched pattern '{result['match']}' at position {result['match_position']}")
     print(f"Found by worker {result['worker_id']} (PID: {result['process_id']})")
+    
+    # If showing entropy was requested
+    if args.show_entropy:
+        entropy_data = calculate_key_entropy(
+            args.key_type, 
+            args.key_bits,
+            None if args.key_type == 'ed25519' else args.prime_selection,
+            args.prime_candidates
+        )
+        display_entropy_info(entropy_data)
     
     if args.logfile:
         with open(args.logfile, 'w') as f:
