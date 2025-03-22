@@ -15,6 +15,7 @@ import os
 import statistics
 import base64
 import logging
+import math
 
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
@@ -191,33 +192,6 @@ class PatternSpec:
             self.compile()
         return self._compiled.search(text)
 
-
-def generate_palindrome_pattern(length):
-    """
-    Generate a regex pattern that matches palindromes of specified length.
-    Length must be at least 2.
-    """
-    if length < 2:
-        raise ValueError("Length must be at least 2")
-        
-    half_length = length // 2
-    middle_char = length % 2  # 1 if odd length, 0 if even
-    
-    # First, construct all the capture groups
-    pattern = ''
-    for i in range(half_length):
-        pattern += f'(.)'
-        
-    # Add middle character if odd length - no longer optional!
-    if middle_char:
-        pattern += '(.)'
-        
-    # Now add backreferences in reverse order
-    for i in range(half_length, 0, -1):
-        pattern += f'\\{i}'
-        
-    return pattern
-
 class CryptoKeyGenerator:
     """Generate keys using the cryptography library"""
     
@@ -254,16 +228,193 @@ class CryptoKeyGenerator:
             public_ssh = f"{public_ssh} {self.email}"
             
         return private_pem, public_ssh
+    
+def calculate_key_entropy(key_type, key_bits, vanity_method=None, prime_candidates=10):
+    """
+    Calculate the approximate entropy of a key based on its type, size, and generation method.
+    Try to implement the learnings done for the README as useful code
+    
+    Args:
+        key_type (str): Either 'ed25519' or 'rsa'
+        key_bits (int): Key size in bits
+        vanity_method (str, optional): For RSA, the method of prime selection ('closest', 'random', 'exact')
+        prime_candidates (int, optional): Number of prime candidates for 'random' method
+    """
+    # Base entropy of standard keys
+    if key_type == 'ed25519':
+        standard_entropy = 256  # Ed25519 offers 128 bits of security (256 bits of entropy)
+        security_bits = 128
+    else:  # RSA
+        # Approximate entropy of RSA comes from the two primes
+        primes_in_range = key_bits // 2 / math.log2(math.e)  # ln(2^(k/2))
+        prime_entropy = math.log2(primes_in_range)
+        standard_entropy = 2 * prime_entropy
+        # RSA security bits are approximately 1/2 the key size
+        security_bits = key_bits / 2
+    
+    # Calculate entropy reduction for vanity keys
+    if vanity_method is None:
+        # For standard keys, no reduction
+        vanity_entropy = standard_entropy
+        entropy_reduction = 0
+        reduction_percentage = 0
+    elif key_type == 'ed25519':
+        # For Ed25519, we're using brute force, so no entropy reduction
+        # (the security comes from the difficulty of finding the private key given the public key)
+        vanity_entropy = standard_entropy
+        entropy_reduction = 0
+        reduction_percentage = 0
+    else:  # RSA vanity
+        # We're fixing one prime (p) and finding another (q) based on the target N
+        if vanity_method == 'exact':
+            # Brute force approach - no reduction beyond fixing one prime
+            vanity_entropy = standard_entropy / 2
+            entropy_reduction = standard_entropy / 2
+        elif vanity_method == 'random':
+            # Random selection from prime_candidates nearby primes
+            prime_selection_entropy = math.log2(prime_candidates)
+            vanity_entropy = standard_entropy / 2 + prime_selection_entropy
+            entropy_reduction = standard_entropy - vanity_entropy
+        else:  # 'closest'
+            # Deterministic selection of closest prime - lose all entropy from q selection
+            vanity_entropy = standard_entropy / 2
+            entropy_reduction = standard_entropy / 2
+        
+        reduction_percentage = (entropy_reduction / standard_entropy) * 100
+    
+    # Calculate equivalent key size for comparison
+    if key_type == 'rsa' and vanity_method is not None:
+        # For vanity RSA, calculate what standard RSA key size would have equivalent security
+        equivalent_key_bits = int(vanity_entropy * 2)  # Approximate
+    else:
+        equivalent_key_bits = key_bits
+    
+    return {
+        'key_type': key_type,
+        'key_bits': key_bits,
+        'standard_entropy': standard_entropy,
+        'vanity_entropy': vanity_entropy,
+        'entropy_reduction': entropy_reduction,
+        'reduction_percentage': reduction_percentage,
+        'security_bits': security_bits * (vanity_entropy / standard_entropy) if vanity_method else security_bits,
+        'equivalent_key_bits': equivalent_key_bits,
+        'vanity_method': vanity_method
+    }
+
+def display_entropy_info(entropy_data):
+    """Display entropy information in a user-friendly format"""
+    print("\nEntropy Information:")
+    print(f"  Key type: {entropy_data['key_type'].upper()}")
+    print(f"  Key size: {entropy_data['key_bits']} bits")
+    
+    if entropy_data['vanity_method']:
+        print(f"  Vanity method: {entropy_data['vanity_method']}")
+        print(f"  Standard entropy: {entropy_data['standard_entropy']:.2f} bits")
+        print(f"  Vanity key entropy: {entropy_data['vanity_entropy']:.2f} bits")
+        print(f"  Entropy reduction: {entropy_data['entropy_reduction']:.2f} bits" + 
+              f" ({entropy_data['reduction_percentage']:.2f}%)")
+        print(f"  Approximate security: {entropy_data['security_bits']:.2f} bits")
+        print(f"  Equivalent standard key size: {entropy_data['equivalent_key_bits']} bits")
+        
+        # Provide security recommendations
+        recommended_bits = max(entropy_data['equivalent_key_bits'] * 2, 2048)
+        if entropy_data['key_bits'] < recommended_bits:
+            print(f"\nSecurity Recommendation:")
+            print(f"  For equivalent security to a standard key, consider using at least " +
+                  f"{recommended_bits} bits instead of {entropy_data['key_bits']} bits.")
+    else:
+        print(f"  Standard entropy: {entropy_data['standard_entropy']:.2f} bits")
+        print(f"  Approximate security: {entropy_data['security_bits']:.2f} bits")
+
+def handle_rsa_vanity_with_entropy(args):
+    """Updated handler for RSA vanity key generation with entropy options"""
+    logger.info(f"Generating RSA vanity key with text: {args.rsa_vanity}")
+    
+    # Check if key size is below recommended minimum for vanity keys
+    if args.key_bits < args.recommended_rsa_bits:
+        logger.warning(f"The requested key size ({args.key_bits} bits) is below the recommended" +
+                       f" minimum of {args.recommended_rsa_bits} bits for vanity RSA keys.")
+        logger.warning("Consider using a larger key size to compensate for entropy reduction.")
+        
+        if args.key_bits < args.min_rsa_bits:
+            logger.error(f"Key size {args.key_bits} is below minimum {args.min_rsa_bits} for vanity RSA keys.")
+            return False
+    
+    try:
+        # If injection position is manually specified, use it
+        if args.injection_position:
+            logger.info(f"Using manually specified injection position: {args.injection_position}")
+            generator = RSAVanityKeyGenerator(
+                args.email, 
+                args.rsa_vanity, 
+                args.key_bits,
+                args.optimize,
+                args.similarity,
+                args.injection_position,
+                args.prime_selection,
+                args.prime_candidates
+            )
+        else:
+            # Use automatic position calculation
+            generator = RSAVanityKeyGenerator(
+                args.email, 
+                args.rsa_vanity, 
+                args.key_bits,
+                args.optimize,
+                args.similarity,
+                prime_selection=args.prime_selection,
+                prime_candidates=args.prime_candidates
+            )
+        
+        privkey, pubkey = generator.generate_key()
+        
+        # Save the key
+        safe_vanity = re.sub(r'[^a-zA-Z0-9]', '_', args.rsa_vanity)
+        keyfile = f"vanity_key-rsa-{safe_vanity}_{int(time.time())}"
+        with open(keyfile, 'w') as f:
+            f.write(privkey)
+        with open(f"{keyfile}.pub", 'w') as f:
+            f.write(pubkey)
+            
+        logger.info(f"\nGenerated RSA vanity key with text: {args.rsa_vanity}")
+        logger.info(f"Key saved as: {keyfile}")
+        logger.info(f"Public key: {pubkey}")
+        
+        # Test the key to make sure it's valid
+        logger.info("\nTesting key validity...")
+        test_key(privkey, pubkey)
+        logger.info("Key successfully validated!")
+        
+        # Show entropy information if requested
+        if args.show_entropy:
+            entropy_data = calculate_key_entropy(
+                'rsa', 
+                args.key_bits, 
+                args.prime_selection,
+                args.prime_candidates
+            )
+            display_entropy_info(entropy_data)
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error generating RSA vanity key: {str(e)}")
+        return False
+
+
 
 class RSAVanityKeyGenerator:
     """Generate RSA keys with vanity strings at specified positions"""
-    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, similarity=0.7, injection_pos=None):
+    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, 
+                 similarity=0.7, injection_pos=None, prime_selection='closest', 
+                 prime_candidates=10):
         self.email = email
         self.vanity_text = vanity_text
         self.key_bits = key_bits
         self.optimize = optimize
         self.similarity = similarity
-
+        self.prime_selection = prime_selection
+        self.prime_candidates = prime_candidates
+    
         # Calculate injection position if not provided
         if injection_pos is None:
             self.injection_pos = KeyParser.calculate_injection_position(key_bits, 65537)
@@ -546,11 +697,7 @@ class RSAVanityKeyGenerator:
             logger.error(f"error in make_valid_rsa_key(): {e}")
         
     def close_prime(self, n):
-        """Find a prime number close to n.
-        
-        This algorithm simply checks consecutive odd numbers starting from n
-        in both directions, returning the first prime it finds.
-        """
+        """Find a prime number close to n using the selected method"""
         if self.is_prime(n):
             logger.debug(f"Target value {n} is already prime")
             return n
@@ -559,32 +706,65 @@ class RSAVanityKeyGenerator:
         if n % 2 == 0:
             n += 1
             
-        logger.debug(f"Looking for prime near {n}")
+        logger.debug(f"Looking for prime near {n} using method: {self.prime_selection}")
         
-        # Start at n and search in both directions simultaneously
-        # This guarantees we find the closest prime
-        offset = 0
-        max_offset = 1000000  # Safety limit
+        if self.prime_selection == 'exact':
+            # This is a placeholder - exact method would require a completely different approach
+            # that doesn't modify the key at all, just generates keys until one matches the pattern
+            logger.warning("Exact prime selection not implemented - falling back to closest")
+            self.prime_selection = 'closest'
         
-        while offset < max_offset:
-            # Try positive offset first (slightly prioritize larger primes)
-            if self.is_prime(n + offset):
-                prime = n + offset
-                logger.debug(f"Found prime {prime} with +{offset} offset")
-                return prime
-                
-            # Then try negative offset
-            if offset > 0 and n - offset > 1 and self.is_prime(n - offset):
-                prime = n - offset
-                logger.debug(f"Found prime {prime} with -{offset} offset")
-                return prime
-                
-            # Move to next odd number
-            offset += 2
+        if self.prime_selection == 'closest':
+            # Find the closest prime (deterministic approach)
+            offset = 0
+            max_offset = 1000000  # Safety limit
             
-        # If we get here, we couldn't find a prime within our limit
-        raise ValueError(f"Could not find any primes within {max_offset} of {n}")
-    
+            while offset < max_offset:
+                # Try positive offset first
+                if self.is_prime(n + offset):
+                    prime = n + offset
+                    logger.debug(f"Found closest prime {prime} with +{offset} offset")
+                    return prime
+                    
+                # Then try negative offset
+                if offset > 0 and n - offset > 1 and self.is_prime(n - offset):
+                    prime = n - offset
+                    logger.debug(f"Found closest prime {prime} with -{offset} offset")
+                    return prime
+                    
+                # Move to next odd number
+                offset += 2
+                
+            raise ValueError(f"Could not find any primes within {max_offset} of {n}")
+            
+        elif self.prime_selection == 'random':
+            # Find multiple primes and choose randomly for more entropy
+            nearby_primes = []
+            offset = 0
+            max_offset = 1000000  # Safety limit
+            
+            while len(nearby_primes) < self.prime_candidates and offset < max_offset:
+                # Try positive offset
+                if self.is_prime(n + offset):
+                    nearby_primes.append(n + offset)
+                    logger.debug(f"Found prime {n + offset} with +{offset} offset")
+                    
+                # Try negative offset
+                if offset > 0 and n - offset > 1 and self.is_prime(n - offset):
+                    nearby_primes.append(n - offset)
+                    logger.debug(f"Found prime {n - offset} with -{offset} offset")
+                    
+                # Move to next odd number
+                offset += 2
+                
+            if not nearby_primes:
+                raise ValueError(f"Could not find any primes within {max_offset} of {n}")
+                
+            # Choose randomly from the found primes
+            prime = random.choice(nearby_primes)
+            logger.debug(f"Randomly selected prime {prime} from {len(nearby_primes)} candidates")
+            return prime
+            
     def is_prime(self, n, k=10):
         """Check if a number is prime."""
         # Basic checks
@@ -1035,6 +1215,38 @@ def add_palindrome_arguments(parser):
         help='Make palindrome matching case-sensitive'
     )
 
+def add_entropy_arguments(parser):
+    """Add entropy calculation related arguments to the argument parser"""
+    entropy_group = parser.add_argument_group('Entropy and Security Options')
+    entropy_group.add_argument(
+        '--show-entropy',
+        action='store_true',
+        help='Calculate and display entropy information for the generated key'
+    )
+    entropy_group.add_argument(
+        '--prime-selection',
+        choices=['closest', 'random', 'exact'],
+        default='closest',
+        help='Method for selecting primes in RSA vanity keys'
+    )
+    entropy_group.add_argument(
+        '--prime-candidates',
+        type=int,
+        default=10,
+        help='Number of prime candidates to consider when using random selection'
+    )
+    entropy_group.add_argument(
+        '--min-rsa-bits',
+        type=int,
+        default=2048,
+        help='Minimum RSA key size for vanity keys (will warn if below this)'
+    )
+    entropy_group.add_argument(
+        '--recommended-rsa-bits',
+        type=int,
+        default=3072,
+        help='Recommended RSA key size for vanity keys to compensate for entropy loss'
+    )
 
 def collect_patterns(args):
     """Collect all patterns from arguments including palindromes"""
@@ -1080,6 +1292,32 @@ def collect_patterns(args):
         
     return patterns
 
+def generate_palindrome_pattern(length):
+    """
+    Generate a regex pattern that matches palindromes of specified length.
+    Length must be at least 2.
+    """
+    if length < 2:
+        raise ValueError("Length must be at least 2")
+        
+    half_length = length // 2
+    middle_char = length % 2  # 1 if odd length, 0 if even
+    
+    # First, construct all the capture groups
+    pattern = ''
+    for i in range(half_length):
+        pattern += f'(.)'
+        
+    # Add middle character if odd length - no longer optional!
+    if middle_char:
+        pattern += '(.)'
+        
+    # Now add backreferences in reverse order
+    for i in range(half_length, 0, -1):
+        pattern += f'\\{i}'
+        
+    return pattern
+
 def test_injection_position(vanity_text, injection_positions, iterations=10):
     results = {}
     success_rates = {}
@@ -1119,16 +1357,17 @@ def test_injection_position(vanity_text, injection_positions, iterations=10):
                     f.write(pub_ssh)
                 logger.info(f"Test key saved as: {tmp_keyfile}")
 
-           except Exception as e:
+            except Exception as e:
                 logger.error(f"Error at injection position {pos}, iteration {i+1}: {e}")
                 elapsed = time.time() - start
                 logger.info(f"Failed after {elapsed:.2f} seconds")
 
 def main():
     parser = argparse.ArgumentParser(
-#        description="Vanity SSH key generation with complex pattern matching",
-#        usage='%(prog)s [options]'
+        description="Vanity SSH key generation with complex pattern matching",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+    
     parser.add_argument(
         '-e', '--email', metavar="email/comment",
         #required=True,
@@ -1172,6 +1411,8 @@ def main():
     
     add_rsa_vanity_arguments(parser)
     add_palindrome_arguments(parser)
+    add_entropy_arguments(parser)
+
     
     keygen_group = parser.add_argument_group('Key Generation options')
     # Key generation options
@@ -1201,9 +1442,8 @@ def main():
     
     args = parser.parse_args()
     
-    # Check if we're in RSA vanity injection mode
     if args.rsa_vanity:
-        success = handle_rsa_vanity(args)
+        success = handle_rsa_vanity_with_entropy(args)
         return 0 if success else 1
     
     # Normal pattern matching mode
@@ -1219,6 +1459,18 @@ def main():
         args.key_bits
     )
     
+    # If showing entropy was requested
+    if args.show_entropy:
+        entropy_data = calculate_key_entropy(
+            args.key_type, 
+            args.key_bits,
+            None if args.key_type == 'ed25519' else args.prime_selection,
+            args.prime_candidates
+        )
+        display_entropy_info(entropy_data)
+    
+    return 0
+
     print(f"Starting generation with {args.processes or multiprocessing.cpu_count()} processes...")
     
     result, generation_results = generation.run_generation(args.processes)
@@ -1254,11 +1506,5 @@ def main():
             json.dump(generation_results, f, indent=2)
         print(f"\nDetailed generation results saved to: {args.logfile}")
 
-
 if __name__ == '__main__':
-#    main()
-    import time
-    import statistics
-    positions = list(range(40, 60))  # for example, testing positions 40 through 59
-    test_vanity = "AB"
-    results = test_injection_position(test_vanity, positions, iterations=20)
+    main()
