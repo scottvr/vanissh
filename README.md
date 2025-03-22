@@ -224,17 +224,71 @@ In my testing, ED25519 key generation is typically 5-10x faster than RSA-2048 fo
 
 ## Security Considerations
 
-Using vanity SSH keys involves security tradeoffs that users should be aware of:
+After I made the Ed25519 version of this tool, I found that an equivalent tool for RSA keys pre-exists vanissh by years. It takes a neat approach (which I have borrowed the premise of when adding RSA key functionality to vanissh) where we modify a valid key to contain our text. This will dramatically reduce the amount of time taken since we aren't (as in our ed25519 approach) generating and checking for match and repeating until a match happens to be found. In the case of RSA, the modulus N = P\*Q forms the basis of our security, where P and Q are two random large prime numbers. The security comes from the fact that while a single multiplication is very fast for modern computers to perform, factoring the product to find *which* very large prime numbers were multiplied is a very computationally-expensive task, with time and resources required  growing exponentially with number size.
+
+The author of the aforementioned [vanity_rsa tool](https://github.com/kvdveer/vanity_rsa) said this in an accompanying blog post:
+
+> We start out with a freshly generated public key. We take the base64 representation and replace a part of it with our injected text. Of course, now the key is no longer valid. Also, it’s just a public key, and we also need a private key. To obtain those, we read the (now invalid) N from the public key. Remember that we need multiply two primes, P and Q to form N. To build the private key, we also need to know what those two primes are. One of these (P) primes can chosen at random, as long as it’s a prime number. The other (Q) can be estimated by dividing N over P. The result of this division is not likely to be prime, but if we can find a prime close to it, the value of P*Q is probably close enough to our N, that the injected text still remains there.
+
+In other words:
+
+### In standard RSA key generation:
+
+- Two large random primes p and q are generated independently
+- The modulus n = p×q forms the basis of the key's security
+- The effective security comes from the computational difficulty of factoring n
+
+### In our vanity key approach:
+
+- We generate an initial random key (p and q are truly random)
+- We modify the encoded public key (thereby changing n to n')
+- We keep p from the original key and find a new q' such that p×q' ≈ n'
+- We rebuild the key using p and q'
+
+The author of `vanity_rsa` also wrote:
+>I believe this tool produces keys that are as hard to crack as any other well-generated key.
+
+Over on the `lobste.rs` list we see some are [dubious about this claim](https://lobste.rs/s/bnkjvt/vanity_rsa_public_key)
+
+I, like the author of vainty_rsa do not claim to be a cryptography expert, but I also found his claim intuitively "wrong", but maybe what he actually meant was "of course we're compromising *some* entropy here, but really hard is still really hard", but I don't know this. I do know I wanted to quantify that trade-off and allow for compensation by the informed user within the tool itself.
+
+So that there is no vagueness or ambiguity in my claims, here is what you should know:
 
 1. **Ed25519 Keys**: The generate-and-check method doesn't reduce security beyond limiting the keyspace to those containing your pattern.
 
 2. **RSA Keys**: The modify-and-repair approach involves more significant tradeoffs:
-   - Entropy reduction of approximately 2^1011 for 2048-bit keys
-   - Using the deterministic prime finding reduces entropy by an additional ~3.32 bits
-   
-3. **Compensation Strategies**:
-   - Use larger key sizes (3072 or 4096 bits for RSA vanity keys)
-   - Use shorter vanity patterns
-   - For maximum security, use the `--prime-selection exact` option (but be prepared to wait)
+- Reduced Prime Selection Space: Instead of selecting q from the entire space of primes of appropriate size, we're selecting q' from a much smaller set of primes near n'/p.
+- Potential for Non-Uniform Distribution: Standard RSA implementations go to great lengths to ensure p and q are chosen with proper randomness and appropriate properties (not too close to each other, not having certain structures, etc.). Our approach might introduce biases.
+- Information Leakage: The vanity pattern itself might reveal that the key was generated using this technique, which tells an attacker they might be able to exploit the restricted keyspace.
 
-For example, a 2048-bit vanity RSA key has approximately 1014 bits of entropy, compared to 2028 bits in a standard 2048-bit RSA key.
+### Quantifying the Security Reduction
+
+- For a standard k-bit RSA key, there are approximately 2^(k/2) primes of size k/2 bits. But when we're looking for a prime q' that makes p×q' close to a specific target n', we're essentially searching in a small window - maybe only examining a few thousand candidate primes near n'/p.
+- If we estimate that we examine, say, 10^4 potential values for q', then we've reduced the effective keyspace by a factor of roughly 2^(k/2) / 10^4. For a 2048-bit key, that's approximately 2^1024 / 10^4 ≈ 2^1024 / 2^13 = 2^1011.
+- So that's an entropy reduction of approximately 2^1011 for 2048-bit keys which  suggests a security reduction of around 13 bits, which is actually not catastrophic for a 2048-bit key (which has an estimated security level of ~112 bits to begin with).
+- An RSA key can have at *most* 2022 bits of entropy, but usually much less and in our case at least 1011 bits less *entropy* (not security)
+- NIST (National Institute of Standards and Technology) recommends using keys with a minimum strength of 112 bits of security to protect data until 2030, and 128 bits of security thereafter. (a 2048-bit assymetric RSA key is considered to have equivalent protection to a 112-bit symmetric key cipher, and 3072-bit RSA is considered equivalent to 128-bit symmetric cipher.) 
+- While experimenting with different ways to find the closest primes (for perlooking formance gains) I ended up keeping a few in as part of a larger benchmark stats collection effort where I am hoping may develop some heuristics about finding optimal injection points and so on based on logging different results with different keysizes, vanity strings, etc. If you use the deterministic prime finding strategy, this reduces entropy by an additional ~3.32 bits
+- For maximum security, use the `--prime-selection exact` option (but be prepared to wait)
+- Further on that note, if an attacker knows exactly which algorithm was used to find q', they might be able to narrow down their search space slightly; they would know that q' is either the nearest prime above n'/p or the nearest prime below it. This could theoretically save them a small amount of work in a factoring attack, but in practice, the "really hard is still really hard" quote that I said might possibly be what the vanity_rsa author *meant* by "as hard to crack" rather than "exactly as hard to crack" holds true here too.
+ 
+ I won't pretend this is easily comprehensible to me, but [The General Number field sieve](https://en.wikipedia.org/wiki/General_number_field_sieve) is apparently the most efficient method for classical computing for integer factorization, and using it apparently would still take somewhere between a billion and 300 trillion years to crack a 2048-bit RSA key.
+
+### That said...
+**Compensation Strategies**:
+- Assuming you need *at least* 112 bits of security and not *exactly 112 bits of security (which is a safe assumption) then the simplest mitigation if you want to use a vanity RSA key and still have "normal" 2048-bit key protection, generate a 3072-bit keypair, which even after our entropy losses yields ~112 bits of security.
+- So for vanity RSA keys:
+  - If you would normally use a 2048-bit RSA key (112 bits of security)
+  Use a 3072-bit vanity key (128 - 16 = 112 bits of effective security)
+  - If you would normally use a 3072-bit RSA key (128 bits of security)
+  Use a 4096-bit vanity key (approximately 140 - 16 = 124 bits of effective security)
+
+- Since Ed25519 starts with 256 bits of entropy, even a relatively long vanity string leaves you with substantial security. For comparison, a 12-character vanity string would reduce entropy by ~72 bits, leaving ~184 bits, which is still much stronger than the ~112 bits that a 2048-bit RSA key provides.
+
+Each character in your vanity pattern reduces key entropy by approximately 6 bits:
+- 1-character pattern: 250 bits of entropy (reduction of 6 bits)
+- 4-character pattern: 232 bits of entropy (reduction of 24 bits)
+- 8-character pattern: 208 bits of entropy (reduction of 48 bits)
+
+Even with substantial vanity patterns, Ed25519 keys remain cryptographically strong.
+
