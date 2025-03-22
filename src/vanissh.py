@@ -1082,29 +1082,47 @@ def collect_patterns(args):
 
 def test_injection_position(vanity_text, injection_positions, iterations=10):
     results = {}
+    success_rates = {}
+
     for pos in injection_positions:
         timings = []
-        for _ in range(iterations):
+        successes = 0
+        
+        logger.info(f"Testing injection position {pos} with vanity text '{vanity_text}'")
+        
+        for i in range(iterations):
+            logger.info(f"Iteration {i+1}/{iterations} for position {pos}")
+            
             generator = RSAVanityKeyGenerator(
                 email="test@example.com",
                 vanity_text=vanity_text,
                 key_bits=2048,
                 injection_pos=pos
             )
+
             start = time.time()
             try:
-                # Only timing the generation (which includes key validation)
-                generator.generate_key()
-            except Exception as e:
-                print(f"Error at injection position {pos}: {e}")
-                continue
-            timings.append(time.time() - start)
-        if timings:
-            avg_time = statistics.mean(timings)
-            results[pos] = avg_time
-            print(f"Injection position {pos}: average time = {avg_time:.2f} seconds over {len(timings)} runs")
-    return results
+                priv_pem, pub_ssh = generator.generate_key()
+                test_key(priv_pem, pub_ssh)
 
+                elapsed = time.time() - start
+                timings.append(elapsed)
+                successes += 1
+
+                logger.info(f"Success at position {pos}, iteration {i+1}: {elapsed:.2f} seconds")
+                
+                # Save successful key for examination
+                tmp_keyfile = f"vanity_key-rsa-test-pos{pos}-iter{i+1}_{int(time.time())}"
+                with open(tmp_keyfile, 'w') as f:
+                    f.write(priv_pem)
+                with open(f"{tmp_keyfile}.pub", 'w') as f:
+                    f.write(pub_ssh)
+                logger.info(f"Test key saved as: {tmp_keyfile}")
+
+           except Exception as e:
+                logger.error(f"Error at injection position {pos}, iteration {i+1}: {e}")
+                elapsed = time.time() - start
+                logger.info(f"Failed after {elapsed:.2f} seconds")
 
 def main():
     parser = argparse.ArgumentParser(
