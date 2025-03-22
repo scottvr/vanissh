@@ -222,18 +222,19 @@ ED25519 key generation is much faster (often by orders of magnitude)
 
 In my testing, ED25519 key generation is typically 5-10x faster than RSA-2048 for this purpose. I didn't even try with RSA4096 but I'd imagine the obvious.
 
-----
-### this section is still being written
+## Security Considerations
 
-According to [RFC8709](https://datatracker.ietf.org/doc/html/rfc8709):
-```
-4. Public Key Format
-The "ssh-ed25519" key format has the following encoding:
+Using vanity SSH keys involves security tradeoffs that users should be aware of:
 
-string
-"ssh-ed25519"
-string
-key
-Here, 'key' is the 32-octet public key described in [RFC8032](https://datatracker.ietf.org/doc/html/rfc8032), Section 5.1.5.
-```
+1. **Ed25519 Keys**: The generate-and-check method doesn't reduce security beyond limiting the keyspace to those containing your pattern.
 
+2. **RSA Keys**: The modify-and-repair approach involves more significant tradeoffs:
+   - Entropy reduction of approximately 2^1011 for 2048-bit keys
+   - Using the deterministic prime finding reduces entropy by an additional ~3.32 bits
+   
+3. **Compensation Strategies**:
+   - Use larger key sizes (3072 or 4096 bits for RSA vanity keys)
+   - Use shorter vanity patterns
+   - For maximum security, use the `--prime-selection exact` option (but be prepared to wait)
+
+For example, a 2048-bit vanity RSA key has approximately 1014 bits of entropy, compared to 2028 bits in a standard 2048-bit RSA key.
