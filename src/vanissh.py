@@ -508,72 +508,131 @@ class RSAVanityKeyGenerator:
             logger.error("This often means the injection corrupted the key structure too much for parsing.")
             traceback.print_exc()
             raise
+import traceback # Ensure this is at the top of vanissh.py
+# ... other imports from vanissh.py
+# from cryptography.hazmat.primitives.asymmetric import rsa # ensure this is imported
+
+# ... BACKEND, _close_prime, is_prime, logger should be defined as in vanissh.py
+
+class RSAVanityKeyGenerator:
+    # ... (your existing __init__, is_valid_vanity, analyze_key, inject_vanity_ssh methods)
+    # Make sure inject_vanity_ssh passes backend=BACKEND to load_ssh_public_key
+    # Example for inject_vanity_ssh ensuring backend is passed:
+    # def inject_vanity_ssh(self, priv_key):
+    #     # ... (previous logic)
+    #     try:
+    #         pub_key = serialization.load_ssh_public_key(modified_public_key_repr_bytes, backend=BACKEND)
+    #         return pub_key
+    #     # ... (error handling)
+
+    def mod_inverse(self, a, m):
+        """Calculate the modular inverse of a mod m."""
+        if m == 0:
+            raise ValueError("Modulus m cannot be zero for modular inverse.")
+        if HAVE_GMPY2: # Assuming HAVE_GMPY2 is globally defined
+            try:
+                inv = gmpy2.invert(a, m)
+                return int(inv)
+            except ZeroDivisionError: # gmpy2 raises this if inverse doesn't exist or m is 1
+                if m == 1: return 0 # By convention, inverse mod 1 is 0
+                raise ValueError(f"Modular inverse for a={a}, m={m} does not exist (gmpy2).")
+            except Exception as e:
+                logger.error(f"GMPY2 invert failed unexpectedly: {e}")
+                # Fall through if gmpy2 fails for other reasons, though unlikely for invert
+        
+        # Extended Euclidean Algorithm fallback
+        g, x, y = self.extended_gcd(a, m)
+        if g != 1:
+            raise ValueError(f"Modular inverse for a={a}, m={m} does not exist (gcd is {g}, not 1).")
+        else:
+            return x % m
+
+    def extended_gcd(self, a, b):
+        """Extended Euclidean Algorithm. Returns (gcd, x, y) such that ax + by = gcd."""
+        if a == 0:
+            return b, 0, 1
+        else:
+            gcd, x, y = self.extended_gcd(b % a, a)
+            return gcd, y - (b // a) * x, x
 
     def make_valid_rsa_key(self, priv_key, pub_key_with_vanity_n):
-        """Generate a valid private key, with N derived from pub_key_with_vanity_n.
-           This method replicates the core logic of the simpler 'proveably works' script."""
-
-        # n_target is derived from the public key where vanity text was injected into N's representation
+        """
+        Generate a valid private key, with N derived from pub_key_with_vanity_n.
+        This version explicitly calculates CRT components for consistency.
+        """
+        logger.debug("Attempting to make RSA key valid with new CRT components.")
         n_target = pub_key_with_vanity_n.public_numbers().n
-        # e should be the same as the original public exponent (e.g., 65537)
         e = pub_key_with_vanity_n.public_numbers().e
-        # p is taken from the original, randomly generated private key
         p = priv_key.private_numbers().p
 
-        # Find a prime q such that p*q is close to n_target
-        # _close_prime and is_prime are global functions in vanissh.py
-        q = _close_prime(n_target // p)
+        logger.debug(f"Original p: {p}")
+        logger.debug(f"Target n (from vanity key): {n_target}")
+        logger.debug(f"Public exponent e: {e}")
 
-        # Assertions from the simpler script (optional but good for sanity)
-        # is_prime(e) might fail if e is not prime, but 65537 is.
-        # p is from a generated key, so it must be prime.
-        # _close_prime ensures q is prime.
-        if not is_prime(p): # Should not happen
-             raise ValueError("Original p is not prime!")
-        if not is_prime(q): # Should not happen if _close_prime works
-             raise ValueError("Derived q is not prime!")
+        if n_target // p <= 1 : # Avoid p being too large relative to n_target
+            logger.error(f"p ({p}) is too large for n_target ({n_target}). n_target // p = {n_target // p}. Cannot find a valid q.")
+            raise ValueError("Cannot find a valid q; p is too large or n_target is too small.")
+
+        q = _close_prime(n_target // p)
+        logger.debug(f"Chosen q: {q}")
+
+        if p == q:
+            logger.warning("p and q are identical. This will result in an invalid RSA key.")
+            # Attempt to find a different q to avoid p == q. This is a simplistic approach.
+            # A more robust solution might involve ensuring _close_prime avoids p or retrying p.
+            for i in range(5): # Try a few times to get a different q
+                q_candidate = _close_prime((n_target // p) + random.randint(1, 100) * ((-1)**i))
+                if q_candidate != p and q_candidate > 1:
+                    q = q_candidate
+                    logger.debug(f"Found different q: {q}")
+                    break
+            if p == q:
+                logger.error("Still p == q after retries. Aborting key generation for this attempt.")
+                raise ValueError("Failed to find a q distinct from p.")
+        
+        if not is_prime(q): # Should be guaranteed by _close_prime
+             raise ValueError(f"Selected q ({q}) is not prime, _close_prime failed.")
+        if not is_prime(p): # Should be guaranteed by original key generation
+             raise ValueError(f"Original p ({p}) is not prime.")
 
 
         phi = (p - 1) * (q - 1)
-        
-        # These rsa.rsa_crt_... functions are assumed to be available via the
-        # `from cryptography.hazmat.primitives.asymmetric import rsa` import,
-        # and behave as they did in the simpler script.
-        # d = e^-1 mod phi
-        # dmp1 = d mod (p-1)
-        # dmq1 = d mod (q-1)
-        # iqmp = q^-1 mod p
-        # The simpler script used these successfully.
-        
-        # For robustness if these rsa.rsa_crt_ methods are not standard public API
-        # or their behavior is uncertain across library versions, one could use:
-        # d_calc = pow(e, -1, phi)
-        # dmp1_calc = pow(d_calc, 1, p - 1)
-        # dmq1_calc = pow(d_calc, 1, q - 1)
-        # iqmp_calc = pow(q, -1, p)
-        # And then use d_calc, dmp1_calc etc. in RSAPrivateNumbers.
-        # However, to "more exactly replicate", we use the simpler script's calls:
+        if phi == 0: # p or q was 1
+            logger.error(f"Phi is zero (p={p}, q={q}). This implies p or q is 1.")
+            raise ValueError("p or q is 1, resulting in phi=0.")
+            
+        logger.debug(f"Calculated phi: {phi}")
 
         try:
-            calculated_d = rsa.rsa_crt_iqmp(phi, e) # pow(e, -1, phi)
-            calculated_dmp1 = rsa.rsa_crt_dmp1(e, p)
-            calculated_dmq1 = rsa.rsa_crt_dmp1(e, q) # simpler script also used rsa_crt_dmp1 here
-            calculated_iqmp = rsa.rsa_crt_iqmp(p, q)
-        except AttributeError as ae:
-            logger.error(f"AttributeError accessing rsa.rsa_crt_... functions: {ae}")
-            logger.error("These functions might not be available in your cryptography version as direct attributes of the rsa module.")
-            logger.error("Falling back to manual calculation for CRT components.")
-            calculated_d = pow(e, -1, phi)
-            calculated_dmp1 = pow(calculated_d, 1, p - 1)
-            calculated_dmq1 = pow(calculated_d, 1, q - 1)
-            calculated_iqmp = pow(q, -1, p)
-            # No, the above fallback is not ideal because rsa_crt_dmp1(e,p) is not pow(d,1,p-1)
-            # but directly d mod (p-1) from e. The library functions are more direct if available.
-            # For now, let this fail if the functions are not there as per simpler script.
-            # Re-raising or handling this properly would be important.
-            # The simpler script assumed these functions exist on `rsa` module.
-            raise # Re-raise if the functions are missing as we are replicating.
+            # 1. Calculate d = e^-1 mod phi
+            calculated_d = self.mod_inverse(e, phi)
+            logger.debug(f"Calculated d: {calculated_d}")
 
+            # 2. Calculate dmp1 = d mod (p-1)
+            if p - 1 == 0: raise ValueError("p-1 is zero, p must be 1, invalid.")
+            calculated_dmp1 = calculated_d % (p - 1)
+            logger.debug(f"Calculated dmp1: {calculated_dmp1}")
+
+            # 3. Calculate dmq1 = d mod (q-1)
+            if q - 1 == 0: raise ValueError("q-1 is zero, q must be 1, invalid.")
+            calculated_dmq1 = calculated_d % (q - 1)
+            logger.debug(f"Calculated dmq1: {calculated_dmq1}")
+
+            # 4. Calculate iqmp = q^-1 mod p
+            calculated_iqmp = self.mod_inverse(q, p)
+            logger.debug(f"Calculated iqmp: {calculated_iqmp}")
+
+        except ValueError as ve:
+            logger.error(f"ValueError during calculation of CRT components (e.g., modular inverse does not exist for e={e}, phi={phi} or q={q}, p={p}): {ve}")
+            traceback.print_exc()
+            raise
+        except Exception as exc: # Catch any other unexpected errors
+            logger.error(f"Unexpected error during calculation of CRT components: {exc}")
+            traceback.print_exc()
+            raise
+
+        new_n = p * q
+        logger.debug(f"New n (p*q): {new_n}")
 
         new_priv_numbers = rsa.RSAPrivateNumbers(
             p=p,
@@ -582,8 +641,26 @@ class RSAVanityKeyGenerator:
             dmp1=calculated_dmp1,
             dmq1=calculated_dmq1,
             iqmp=calculated_iqmp,
-            public_numbers=rsa.RSAPublicNumbers(e, p * q) # The new N = p * q
+            public_numbers=rsa.RSAPublicNumbers(e, new_n)
         )
+
+        logger.debug("Constructed RSAPrivateNumbers. Attempting to get private_key object from numbers...")
+        try:
+            # BACKEND should be globally defined
+            final_key = new_priv_numbers.private_key(backend=BACKEND)
+            logger.info("Successfully created final private key object from numbers.")
+            return final_key
+        except ValueError as ve_priv_key:
+            logger.error(f"ValueError when calling .private_key() - OpenSSL validation likely failed: {ve_priv_key}")
+            logger.error("This usually means the RSA parameters (p,q,d,dmp1,dmq1,iqmp,e,n) were found to be inconsistent by the backend.")
+            logger.error(f"Values passed to RSAPrivateNumbers: p={p}, q={q}, d={calculated_d}, dmp1={calculated_dmp1}, dmq1={calculated_dmq1}, iqmp={calculated_iqmp}, e={e}, n={new_n}")
+            traceback.print_exc()
+            raise
+        except Exception as final_exc: # Catch any other unexpected errors
+            logger.error(f"Unexpected error when calling .private_key(): {final_exc}")
+            traceback.print_exc()
+            raise
+
         # BACKEND should be globally defined in vanissh.py
         return new_priv_numbers.private_key(backend=BACKEND)
 
