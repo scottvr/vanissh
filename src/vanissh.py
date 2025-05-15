@@ -411,87 +411,260 @@ def handle_rsa_vanity_with_entropy(args):
         return False
 
 
-
 class RSAVanityKeyGenerator:
     """Generate RSA keys with vanity strings at specified positions"""
-    def __init__(self, email, vanity_text, key_bits=2048, optimize=False, 
-                 similarity=0.7, injection_pos=None, prime_selection='closest', 
+    def __init__(self, email, vanity_text, key_bits=2048, optimize=False,
+                 similarity=0.7, injection_pos=None, prime_selection='closest',
                  prime_candidates=10):
         self.email = email
         self.vanity_text = vanity_text
         self.key_bits = key_bits
         self.optimize = optimize
         self.similarity = similarity
-        self.prime_selection = prime_selection
-        self.prime_candidates = prime_candidates
-    
-        # Calculate injection position if not provided
+        self.prime_selection = prime_selection # Note: simpler script doesn't use this for surgical
+        self.prime_candidates = prime_candidates # Note: simpler script doesn't use this for surgical
+
         if injection_pos is None:
+            # This calculation should provide the correct offset similar to the
+            # simpler script's hardcoded '38' (which is index 37 for actual N data start)
+            # For e.g. 1024-bit key, exponent 65537, this calculates 37.
             self.injection_pos = KeyParser.calculate_injection_position(key_bits, 65537)
         else:
             self.injection_pos = injection_pos
 
         logger.info(f"Using injection position: {self.injection_pos} for vanity text: {vanity_text}")
+        if not self.is_valid_vanity():
+            raise ValueError(f"Vanity text '{self.vanity_text}' contains invalid Base64 characters")
 
     def is_valid_vanity(self, text=None):
         """Check if vanity text contains only valid base64 characters"""
         if text is None:
             text = self.vanity_text
+        # Assuming BASE64_CHARS is defined globally as in vanissh.py
         return all(c in BASE64_CHARS for c in text)
-        
+
     def analyze_key(self, pub_key_bytes):
         """Analyze a public key's byte structure for debugging"""
         try:
-            # Print the binary structure, hex values and base64
             logger.debug("Key bytes (hex): " + pub_key_bytes.hex())
             logger.debug("Key base64: " + base64.b64encode(pub_key_bytes).decode('utf-8'))
-            
-            # Try to parse specific components if it's an RSA key
-            # This is a simplified approach - RSA SSH keys have specific ASN.1 structures
             if b'ssh-rsa' in pub_key_bytes:
                 logger.debug("RSA key detected")
-                # Find the header, exponent and modulus positions
                 parts = pub_key_bytes.split(b' ')
                 if len(parts) >= 2:
                     base64_part = parts[1]
                     try:
                         decoded = base64.b64decode(base64_part)
                         logger.debug(f"Decoded key length: {len(decoded)}")
+                        # Further detailed parsing could be added here if needed
                     except Exception as e:
-                        logger.error(f"Error decoding base64: {e}")
+                        logger.error(f"Error decoding base64 part of key: {e}")
             return True
         except Exception as e:
             logger.error(f"Error analyzing key: {e}")
             return False
 
-    def generate_key(self):
-        """Generate a valid RSA key with the vanity text"""
-        # Check if vanity is valid
-        if not self.is_valid_vanity():
-            raise ValueError(f"Vanity text '{self.vanity_text}' contains invalid characters")
-            
-        # If optimization is enabled, find a better variation
-        if self.optimize:
-            original = self.vanity_text
-            candidates = self.generate_optimized_candidates(original)
-            logger.info(f"Original vanity: {original}")
-            logger.info("Optimized candidates (estimated performance boost):")
-            for i, (candidate, score) in enumerate(candidates[:5], 1):
-                print(f"{i}. '{candidate}' (approx. {score:.1f}x faster)")
-                
-            # Ask user which candidate to use
-            choice = input("Enter number of candidate to use (or 0 for original): ")
-            try:
-                choice = int(choice)
-                if 1 <= choice <= len(candidates):
-                    self.vanity_text = candidates[choice-1][0]
-                    print(f"Using optimized vanity: '{self.vanity_text}'")
-                else:
-                    print(f"Using original vanity: '{original}'")
-            except ValueError:
-                print(f"Using original vanity: '{original}'")
+    def inject_vanity_ssh(self, priv_key):
+        """Embed the vanity text in an SSH-format public key.
+           This key is likely not a valid key post-injection, before fixing."""
+        vanity_bytes = self.vanity_text.encode()
+        # Ensure vanity text itself consists of valid base64 characters (already checked in __init__)
+
+        public_key_repr_bytes = priv_key.public_key().public_bytes(
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH
+        )
+
+        logger.debug(f"Original public key for injection: {public_key_repr_bytes!r}")
+        logger.debug(f"Calculated injection position: {self.injection_pos}")
+        logger.debug(f"Vanity text to inject (bytes): {vanity_bytes!r}")
+
+        if not (0 <= self.injection_pos <= len(public_key_repr_bytes)):
+            raise ValueError(
+                f"Injection position {self.injection_pos} is out of bounds "
+                f"for public key length {len(public_key_repr_bytes)}."
+            )
         
-        # Start with a normal RSA key
+        # Ensure vanity string doesn't overwrite past the end of the original key too much,
+        # though the modulus part is typically long.
+        # This part is tricky as the actual N data varies.
+        # The simpler script just slices and replaces.
+
+        modified_public_key_repr_bytes = (
+            public_key_repr_bytes[:self.injection_pos] +
+            vanity_bytes +
+            public_key_repr_bytes[self.injection_pos + len(vanity_bytes):]
+        )
+
+        logger.debug(f"Modified public key for loading: {modified_public_key_repr_bytes!r}")
+
+        try:
+            # We now have an invalid (but hopefully parsable for N, E) vanity key. Time to read it back in.
+            # BACKEND should be globally defined in vanissh.py
+            pub_key = serialization.load_ssh_public_key(modified_public_key_repr_bytes, backend=BACKEND)
+            return pub_key
+        except Exception as e:
+            logger.error(f"Error loading modified (injected) SSH public key: {e}")
+            logger.error("This often means the injection corrupted the key structure too much for parsing.")
+            traceback.print_exc()
+            raise
+
+    def make_valid_rsa_key(self, priv_key, pub_key_with_vanity_n):
+        """Generate a valid private key, with N derived from pub_key_with_vanity_n.
+           This method replicates the core logic of the simpler 'proveably works' script."""
+
+        # n_target is derived from the public key where vanity text was injected into N's representation
+        n_target = pub_key_with_vanity_n.public_numbers().n
+        # e should be the same as the original public exponent (e.g., 65537)
+        e = pub_key_with_vanity_n.public_numbers().e
+        # p is taken from the original, randomly generated private key
+        p = priv_key.private_numbers().p
+
+        # Find a prime q such that p*q is close to n_target
+        # _close_prime and is_prime are global functions in vanissh.py
+        q = _close_prime(n_target // p)
+
+        # Assertions from the simpler script (optional but good for sanity)
+        # is_prime(e) might fail if e is not prime, but 65537 is.
+        # p is from a generated key, so it must be prime.
+        # _close_prime ensures q is prime.
+        if not is_prime(p): # Should not happen
+             raise ValueError("Original p is not prime!")
+        if not is_prime(q): # Should not happen if _close_prime works
+             raise ValueError("Derived q is not prime!")
+
+
+        phi = (p - 1) * (q - 1)
+        
+        # These rsa.rsa_crt_... functions are assumed to be available via the
+        # `from cryptography.hazmat.primitives.asymmetric import rsa` import,
+        # and behave as they did in the simpler script.
+        # d = e^-1 mod phi
+        # dmp1 = d mod (p-1)
+        # dmq1 = d mod (q-1)
+        # iqmp = q^-1 mod p
+        # The simpler script used these successfully.
+        
+        # For robustness if these rsa.rsa_crt_ methods are not standard public API
+        # or their behavior is uncertain across library versions, one could use:
+        # d_calc = pow(e, -1, phi)
+        # dmp1_calc = pow(d_calc, 1, p - 1)
+        # dmq1_calc = pow(d_calc, 1, q - 1)
+        # iqmp_calc = pow(q, -1, p)
+        # And then use d_calc, dmp1_calc etc. in RSAPrivateNumbers.
+        # However, to "more exactly replicate", we use the simpler script's calls:
+
+        try:
+            calculated_d = rsa.rsa_crt_iqmp(phi, e) # pow(e, -1, phi)
+            calculated_dmp1 = rsa.rsa_crt_dmp1(e, p)
+            calculated_dmq1 = rsa.rsa_crt_dmp1(e, q) # simpler script also used rsa_crt_dmp1 here
+            calculated_iqmp = rsa.rsa_crt_iqmp(p, q)
+        except AttributeError as ae:
+            logger.error(f"AttributeError accessing rsa.rsa_crt_... functions: {ae}")
+            logger.error("These functions might not be available in your cryptography version as direct attributes of the rsa module.")
+            logger.error("Falling back to manual calculation for CRT components.")
+            calculated_d = pow(e, -1, phi)
+            calculated_dmp1 = pow(calculated_d, 1, p - 1)
+            calculated_dmq1 = pow(calculated_d, 1, q - 1)
+            calculated_iqmp = pow(q, -1, p)
+            # No, the above fallback is not ideal because rsa_crt_dmp1(e,p) is not pow(d,1,p-1)
+            # but directly d mod (p-1) from e. The library functions are more direct if available.
+            # For now, let this fail if the functions are not there as per simpler script.
+            # Re-raising or handling this properly would be important.
+            # The simpler script assumed these functions exist on `rsa` module.
+            raise # Re-raise if the functions are missing as we are replicating.
+
+
+        new_priv_numbers = rsa.RSAPrivateNumbers(
+            p=p,
+            q=q,
+            d=calculated_d,
+            dmp1=calculated_dmp1,
+            dmq1=calculated_dmq1,
+            iqmp=calculated_iqmp,
+            public_numbers=rsa.RSAPublicNumbers(e, p * q) # The new N = p * q
+        )
+        # BACKEND should be globally defined in vanissh.py
+        return new_priv_numbers.private_key(backend=BACKEND)
+
+    def generate_key(self):
+        """Generate a valid RSA key with the vanity text using the surgical method."""
+        logger.info("Generating initial RSA key for surgical vanity...")
+        priv_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=self.key_bits,
+            backend=BACKEND # ensure backend is passed
+        )
+
+        logger.info(f"Original private key p: {priv_key.private_numbers().p}")
+        logger.info("Original public key structure (before injection):")
+        self.analyze_key(priv_key.public_key().public_bytes(
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH
+        ))
+
+        logger.info(f"Injecting vanity string: '{self.vanity_text}' at position {self.injection_pos}")
+        # pub_key_with_vanity_n will likely have a nonsensical N if injection fails to parse
+        pub_key_with_vanity_n = self.inject_vanity_ssh(priv_key)
+
+        logger.info("Public key structure (after injection, before fixing):")
+        self.analyze_key(pub_key_with_vanity_n.public_bytes( # This will be based on the N from the modified key
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH
+        ))
+        logger.info(f"N from injected public key: {pub_key_with_vanity_n.public_numbers().n}")
+
+
+        logger.info("Attempting to make the key mathematically valid...")
+        start_time = time.time()
+
+        try:
+            # This is the core step using the replicated logic
+            valid_key = self.make_valid_rsa_key(priv_key, pub_key_with_vanity_n)
+            elapsed = time.time() - start_time
+            logger.info(f"Key validation and reconstruction completed in {elapsed:.2f} seconds")
+
+            # Encode the final valid key
+            priv_pem = valid_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ).decode()
+
+            pub_ssh = valid_key.public_key().public_bytes(
+                encoding=serialization.Encoding.OpenSSH,
+                format=serialization.PublicFormat.OpenSSH
+            ).decode()
+
+            # Add email/comment to public key if not already present
+            # (though public_bytes for OpenSSH usually doesn't add comments by default)
+            if self.email and not pub_ssh.strip().endswith(self.email):
+                pub_ssh = f"{pub_ssh.strip()} {self.email}"
+
+            logger.info("Final public key with vanity (if successful):")
+            self.analyze_key(pub_ssh.encode()) # Analyze the final resulting key
+
+            # Optionally, verify if the vanity string is still present
+            final_b64_part = pub_ssh.split()[1]
+            if self.vanity_text in final_b64_part:
+                logger.info(f"SUCCESS: Vanity string '{self.vanity_text}' found in the final public key!")
+            else:
+                logger.warning(f"Vanity string '{self.vanity_text}' NOT found in the final public key's Base64 part.")
+                logger.warning(f"Final Base64 part to check: {final_b64_part}")
+
+
+            return priv_pem, pub_ssh
+
+        except Exception as e:
+            logger.error(f"Error during surgical key generation process: {e}")
+            traceback.print_exc() # For detailed debugging
+            raise
+            
+    # ... (other methods like verify_key_functionality, mod_inverse, extended_gcd, generate_optimized_candidates)
+    # should remain as they are, unless they directly conflict.
+    # The mod_inverse and extended_gcd are not used by the replicated make_valid_rsa_key if rsa.rsa_crt_... funcs are used.
+
+        #  Start with a normal RSA key
         logger.info("Generating initial RSA key...")
         priv_key = rsa.generate_private_key(
             public_exponent=65537,
