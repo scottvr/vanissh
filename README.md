@@ -23,8 +23,6 @@ I chuckled at the notion of running the command over and over again until you ge
 
 So naturally a tool started taking shape in my mind that would take a string, or perhaps a wordlist, and maybe even allow the user to specify where they would like to see the string... hmmm.
 
->Yeah, and now after sharing this tool I have learned about the long-existing vanity_rsa, about seven years late to that party. *shrug* Well, I can take some influence from his magic math trick for rsa, and my value add is um... palindromes?
-
 # Usage
 
 ```bash
