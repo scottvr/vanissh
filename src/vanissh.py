@@ -128,31 +128,22 @@ class KeyParser:
 
     @staticmethod
     def calculate_injection_position(key_bits=2048, exponent=65537):
-        """Calculate the exact injection position based on key parameters"""
-        # only for rsa keys
-        # Base position includes 'ssh-rsa ' (8 characters)
-        position = 8
-        
-        # Add header length
-        position += len(KeyParser.RSA_HEADER)
-        
-        # Add exponent encoding length
-        exponent_encoding = KeyParser.RSA_EXPONENTS.get(exponent)
-        if exponent_encoding:
-            position += len(exponent_encoding)
-        else:
-            logger.warning(f"Unknown exponent {exponent}, injection position may be incorrect")
-        
-        # Add modulus prefix length
-        modulus_prefix = KeyParser.RSA_MODULUS_PREFIXES.get(key_bits)
-        if modulus_prefix:
-            position += len(modulus_prefix)
-        else:
-            logger.warning(f"Unknown key size {key_bits}, injection position may be incorrect")
-        
+        """Index (in the full "ssh-rsa AAAA..." string) of the first Base64 character
+        that lies entirely inside the modulus bytes.
+
+        Wire format: string "ssh-rsa" (4+7 bytes), mpint e (4 + len bytes), mpint n
+        (4-byte length, a 0x00 sign byte because the top bit of n is set, then the
+        modulus).  The character just before the returned one holds the sign byte's
+        low nibble plus the top two bits of the modulus, so a vanity string placed
+        there changes the key size (a leading A or B shrinks it below key_bits and
+        shifts the whole encoding; E and later grow it) instead of landing in n.
+        The result does not depend on key_bits: 39 for e=65537.
+        """
+        e_len = (exponent.bit_length() + 8) // 8          # mpint: leading 0x00 when the top bit is set
+        prefix_bytes = 4 + 7 + 4 + e_len + 4 + 1
+        position = len("ssh-rsa ") + -(-prefix_bytes * 8 // 6)
         logger.info(f"Calculated injection position for {key_bits}-bit RSA key with e={exponent}: {position}")
         return position
-
 
 class PatternSpec:
     """Specification for a pattern to match in a key"""
@@ -223,7 +214,7 @@ class CryptoKeyGenerator:
         # Get private key PEM
         private_pem = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
+            format=serialization.PrivateFormat.OpenSSH,
             encryption_algorithm=serialization.NoEncryption()
         ).decode()
         
@@ -508,23 +499,6 @@ class RSAVanityKeyGenerator:
             logger.error("This often means the injection corrupted the key structure too much for parsing.")
             traceback.print_exc()
             raise
-import traceback # Ensure this is at the top of vanissh.py
-# ... other imports from vanissh.py
-# from cryptography.hazmat.primitives.asymmetric import rsa # ensure this is imported
-
-# ... BACKEND, _close_prime, is_prime, logger should be defined as in vanissh.py
-
-class RSAVanityKeyGenerator:
-    # ... (your existing __init__, is_valid_vanity, analyze_key, inject_vanity_ssh methods)
-    # Make sure inject_vanity_ssh passes backend=BACKEND to load_ssh_public_key
-    # Example for inject_vanity_ssh ensuring backend is passed:
-    # def inject_vanity_ssh(self, priv_key):
-    #     # ... (previous logic)
-    #     try:
-    #         pub_key = serialization.load_ssh_public_key(modified_public_key_repr_bytes, backend=BACKEND)
-    #         return pub_key
-    #     # ... (error handling)
-
     def mod_inverse(self, a, m):
         """Calculate the modular inverse of a mod m."""
         if m == 0:
@@ -704,7 +678,7 @@ class RSAVanityKeyGenerator:
             # Encode the final valid key
             priv_pem = valid_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
+                format=serialization.PrivateFormat.OpenSSH,
                 encryption_algorithm=serialization.NoEncryption()
             ).decode()
 
@@ -737,68 +711,6 @@ class RSAVanityKeyGenerator:
             traceback.print_exc() # For detailed debugging
             raise
             
-    # ... (other methods like verify_key_functionality, mod_inverse, extended_gcd, generate_optimized_candidates)
-    # should remain as they are, unless they directly conflict.
-    # The mod_inverse and extended_gcd are not used by the replicated make_valid_rsa_key if rsa.rsa_crt_... funcs are used.
-
-        #  Start with a normal RSA key
-        logger.info("Generating initial RSA key...")
-        priv_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=self.key_bits
-        )
-        
-        # Get the original key bytes for analysis
-        orig_pub_bytes = priv_key.public_key().public_bytes(
-            encoding=serialization.Encoding.OpenSSH,
-            format=serialization.PublicFormat.OpenSSH
-        )
-        logger.info("Original public key structure:")
-        self.analyze_key(orig_pub_bytes)
-
-        # Inject vanity string
-        logger.info(f"Injecting vanity string: {self.vanity_text}")
-        pub_key = self.inject_vanity_ssh(priv_key)
-        
-        # Get the modified key bytes for analysis
-        modified_pub_bytes = pub_key.public_bytes(
-            encoding=serialization.Encoding.OpenSSH,
-            format=serialization.PublicFormat.OpenSSH
-        )
-        logger.info("Modified public key structure:")
-        self.analyze_key(modified_pub_bytes)
-
-        # Fix the key to make it valid
-        logger.info("Making the key mathematically valid (this may take a while)...")
-        start_time = time.time()
-
-        try:
-            valid_key = self.make_valid_rsa_key(priv_key, pub_key)
-            elapsed = time.time() - start_time
-            print(f"Key validation completed in {elapsed:.2f} seconds")
-        
-            # Encode the key in OpenSSH format
-            priv_pem = valid_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption()
-            ).decode()
-        
-            pub_ssh = valid_key.public_key().public_bytes(
-                encoding=serialization.Encoding.OpenSSH,
-                format=serialization.PublicFormat.OpenSSH
-            ).decode()
-
-            # Add comment to public key if not already present
-            if not pub_ssh.endswith(self.email):
-                pub_ssh = f"{pub_ssh} {self.email}"
-
-            return priv_pem, pub_ssh
-
-        except Exception as e:
-            logger.error(f"Error creating valid key {e}")
-            raise
-
     def verify_key_functionality(self, key):
         """Verify that the key can be used for basic cryptographic operations"""
         logger.info("Verifying key functionality...")
@@ -859,298 +771,6 @@ class RSAVanityKeyGenerator:
             logger.error(f"Encryption/decryption test failed: {e}")
             raise
 
-    def inject_vanity_ssh(self, priv_key):
-        """Embed the vanity text in an SSH-format public key"""
-        vanity = self.vanity_text.encode()
-        
-        # Generate the SSH format public key
-        public_key_repr = priv_key.public_key().public_bytes(
-            encoding=serialization.Encoding.OpenSSH,
-            format=serialization.PublicFormat.OpenSSH
-        )
-
-        # Debug - show before injection
-        logger.debug(f"Original public key: {public_key_repr}")
-        logger.debug(f"Injection position: {self.injection_pos}")
-        logger.debug(f"Vanity text to inject: {vanity}")
-        
-        # Ensure the injection position is within range
-        if self.injection_pos >= len(public_key_repr):
-            raise ValueError(f"Injection position {self.injection_pos} is beyond key length {len(public_key_repr)}")
-        
-        # Print what's at the injection position for debugging
-        start_pos = max(0, self.injection_pos - 10)
-        end_pos = min(len(public_key_repr), self.injection_pos + 10)
-        context = public_key_repr[start_pos:end_pos]
-        logger.debug(f"Context around injection position: {context}")
-        
-        # Inject the vanity text
-        public_key_repr = (
-            public_key_repr[:self.injection_pos] +
-            vanity +
-            public_key_repr[self.injection_pos + len(vanity):]
-        )
-
-        # Debug - show after injection
-        logger.debug(f"Modified public key: {public_key_repr}")
-        
-        try:
-            # Try to load the modified key
-            pub_key = serialization.load_ssh_public_key(public_key_repr)
-            return pub_key
-        except Exception as e:
-            logger.error(f"Error loading modified key: {e}")
-            raise
-
-    def make_valid_rsa_key(self, priv_key, pub_key):
-        """Generate a valid private key, with N close to the N from pub_key"""
-    
-        # Attempt to make the key valid by finding a Q which multiplies with P to
-        # form something close to N
-        n = pub_key.public_numbers().n
-        e = pub_key.public_numbers().e
-        p = priv_key.private_numbers().p
-        q = _close_prime(n // p)
-    
-        assert is_prime(e)
-        assert is_prime(p)
-        assert is_prime(q)
-    
-        # Compute D from the new P&Q
-        phi = (p - 1) * (q - 1)
-    
-        return rsa.RSAPrivateNumbers(
-            public_numbers=rsa.RSAPublicNumbers(e, p * q),
-            p=p, q=q, 
-            d=rsa.rsa_crt_iqmp(phi, e),
-            dmp1=rsa.rsa_crt_dmp1(e, p),
-            dmq1=rsa.rsa_crt_dmp1(e, q),
-            iqmp=rsa.rsa_crt_iqmp(p, q),
-        ).private_key(BACKEND)
-    
-    def fucked_make_valid_rsa_key(self, priv_key, pub_key):
-        """Generate a valid private key, with N close to the N from pub_key"""
-        try:
-            # Extract components from the keys
-            n_target = pub_key.public_numbers().n
-            e = pub_key.public_numbers().e
-            p_orig = priv_key.private_numbers().p
-            q_orig = priv_key.private_numbers().q
-
-            logger.debug(f"Target n: {n_target}")
-            logger.debug(f"Original p: {p_orig}")
-            logger.debug(f"Original q: {q_orig}")
-
-            p = p_orig
-            # Find a prime q such that p*q is close to n_target
-            q_target = n_target // p 
-            logger.debug(f"Target q: {q_target}")
-
-            q = _close_prime(q_target)
-            logger.debug(f"Found close prime q: {q}")
-        
-            n = p * q
-            logger.debug(f"New modulus n: {n}")
-      
-            # Calculate phi (Euler's totient function)
-            phi = (p - 1) * (q - 1)
-
-            # Try to use the library's function for recovering private exponent
-            try:
-                from cryptography.hazmat.primitives.asymmetric.rsa import (
-                    rsa_recover_private_exponent,
-                    rsa_crt_dmp1,
-                    rsa_crt_dmq1,
-                    rsa_crt_iqmp
-                )
-                
-#                # Use the library's function to calculate d
-#                d = rsa_recover_private_exponent(e, p, q)
-#                logger.debug(f"obtained d from recover_private_exponents: {d}")
-                d = rsa_crt_iqmp(phi, e)
-                dmp1 = rsa_crt_dmp1(e, p)
-                dmq1 = rsa_crt_dmp1(e, q)
-                iqmp = rsa_crt_iqmp(p, q)
-                
-            except (ImportError, AttributeError):
-                # Fallback to manual calculation using Carmichael's totient
-                # Calculate lcm(p-1, q-1) instead of (p-1)*(q-1)
-                from math import gcd
-                
-                def lcm(a, b):
-                    return a * b // gcd(a, b)
-                    
-                phi = lcm(p - 1, q - 1)  # Carmichael's totient
-                d = self.mod_inverse(e, phi)
-            
-            # Calculate the CRT parameters
-            dmp1 = d % (p - 1)
-            dmq1 = d % (q - 1)
-            iqmp = self.mod_inverse(p, q)
-            
-            # Create a new private key with these values
-            private_numbers = rsa.RSAPrivateNumbers(
-                p=p,
-                q=q,
-                d=d,
-                dmp1=dmp1,
-                dmq1=dmq1,
-                iqmp=iqmp,
-                public_numbers=rsa.RSAPublicNumbers(e=e, n=n)
-            )
-            
-            # Get the key and validate it
-            valid_key = private_numbers.private_key()
-            return valid_key
-                
-        except Exception as e:
-            logger.error(f"Error in make_valid_rsa_key: {e}")
-            return None
-    
-#            # Compute the private key from p, q, and e
-#            phi = (p - 1) * (q - 1)
-#            try:
-#                d = self.mod_inverse(e, phi)
-#                iqmp = self.mod_inverse(p, q)
-#                dmp1 = d % (p - 1)
-#                dmq1 = d % (q - 1)
-#            except Exception as e:
-#                logger.error(f"Error calculating private components")
-#                raise
-#
-#            # Create a new private key with these values
-#            private_numbers = rsa.RSAPrivateNumbers(
-#                p=p,
-#                q=q,
-#                d=d,
-#                dmp1=dmp1,
-#                dmq1=dmq1,
-#                iqmp=iqmp,
-#                public_numbers=rsa.RSAPublicNumbers(e=e, n=p*q)
-#            )
-#
-#            valid_key = private_numbers.private_key()
-#            valid_key.private_numbers() # this raises an error if invalid
-#
-#            return valid_key
-#
-#        except Exception as e:
-#            logger.error(f"error in make_valid_rsa_key(): {e}")
-        
-#        if self.prime_selection == 'exact':
-#            # This is a placeholder - exact method would require a completely different approach
-#            # that doesn't modify the key at all, just generates keys until one matches the pattern
-#            logger.warning("Exact prime selection not implemented - falling back to closest")
-#            self.prime_selection = 'closest'
-#        
-#        if self.prime_selection == 'closest':
-#            # Find the closest prime (deterministic approach)
-#            offset = 2
-#            max_offset = 100000000  # Safety limit
-#            
-#            while offset < max_offset:
-#                # Try positive offset first
-#                if self.is_prime(n + offset):
-#                    prime = n + offset
-#                    logger.debug(f"Found closest prime {prime} with +{offset} offset")
-#                    return prime
-#                    
-#                    prime = n - offset
-#                    logger.debug(f"Found closest prime {prime} with -{offset} offset")
-#                    return prime
-#                    
-#                # Move to next odd number
-#                offset += 2
-#                
-#            raise ValueError(f"Could not find any primes within {max_offset} of {n}")
-#            
-#        elif self.prime_selection == 'random':
-#            # Find multiple primes and choose randomly for more entropy
-#            nearby_primes = []
-#            offset = 0
-#            max_offset = 1000000  # Safety limit
-#            
-#            while len(nearby_primes) < self.prime_candidates and offset < max_offset:
-#                # Try positive offset
-#                if self.is_prime(n + offset):
-#                    nearby_primes.append(n + offset)
-#                    logger.debug(f"Found prime {n + offset} with +{offset} offset")
-#                    
-#                # Try negative offset
-#                if offset > 0 and n - offset > 1 and self.is_prime(n - offset):
-#                    nearby_primes.append(n - offset)
-#                    logger.debug(f"Found prime {n - offset} with -{offset} offset")
-#                    
-#                # Move to next odd number
-#                offset += 2
-#                
-#            if not nearby_primes:
-#                raise ValueError(f"Could not find any primes within {max_offset} of {n}")
-#                
-#            # Choose randomly from the found primes
-#            prime = random.choice(nearby_primes)
-#            logger.debug(f"Randomly selected prime {prime} from {len(nearby_primes)} candidates")
-#            return prime
-#            
-#    def is_prime(self, n, k=10):
-#        """Check if a number is prime."""
-#        # Basic checks
-#        if n <= 1:
-#            return False
-#        if n <= 3:
-#            return True
-#        if n % 2 == 0:
-#            return False
-#        
-#        if HAVE_GMPY2:
-#            return gmpy2.is_prime(n)
-#        else:
-#            # Miller-Rabin primality test
-#            # Find r and s such that n-1 = 2^s * r
-#            r, s = n - 1, 0
-#            while r % 2 == 0:
-#                r //= 2
-#                s += 1
-#                
-#            # Witness loop
-#            for _ in range(k):
-#                a = random.randrange(2, n - 1)
-#                x = pow(a, r, n)
-#                if x != 1 and x != n - 1:
-#                    j = 1
-#                    while j < s and x != n - 1:
-#                        x = pow(x, 2, n)
-#                        if x == 1:
-#                            return False
-#                        j += 1
-#                    if x != n - 1:
-#                        return False
-#            return True
-#            
-    def mod_inverse(self, a, m):
-        """Calculate the modular inverse of a mod m."""
-        if HAVE_GMPY2:
-            try:
-                return int(gmpy2.invert(a, m))
-            except Exception as e:
-                logger.error(f"GMPY2 invert failed: {e}")
-
-        else:
-            # Extended Euclidean Algorithm
-            g, x, y = self.extended_gcd(a, m)
-            if g != 1:
-                raise ValueError("Modular inverse does not exist")
-            else:
-                return x % m
-                
-    def extended_gcd(self, a, b):
-        """Extended Euclidean Algorithm"""
-        if a == 0:
-            return b, 0, 1
-        else:
-            gcd, x, y = self.extended_gcd(b % a, a)
-            return gcd, y - (b // a) * x, x
-            
     def generate_optimized_candidates(self, original):
         """Generate optimized candidates for the vanity string"""
         candidates = []
@@ -1486,14 +1106,15 @@ def handle_rsa_vanity(args):
 def test_key(priv_pem, pub_ssh):
     """Test that the generated key is valid and works for encryption/signing"""
     # Load the private key
-    priv_key = serialization.load_pem_private_key(
-        priv_pem.encode(),
-        password=None
-    )
+    priv_bytes = priv_pem.encode()
+    if priv_bytes.startswith(b"-----BEGIN OPENSSH PRIVATE KEY-----"):
+        priv_key = serialization.load_ssh_private_key(priv_bytes, password=None)
+    else:
+        priv_key = serialization.load_pem_private_key(priv_bytes, password=None)
     
-    # Load the public key
+    # Load the public key (drop the comment)
     pub_key = serialization.load_ssh_public_key(
-        pub_ssh.split()[0:2].encode()  # Remove comment part
+        " ".join(pub_ssh.split()[0:2]).encode()
     )
     
     # Test encryption/decryption
@@ -1906,7 +1527,7 @@ def main():
         help='Number of worker processes to use'
     )
     parser.add_argument(
-        '-l', '--logfile', type=ascii, metavar="logfile",
+        '-l', '--logfile', metavar="logfile",
         help='Output file for generation results (JSON)'
     )
     
